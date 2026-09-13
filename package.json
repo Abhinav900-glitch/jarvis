@@ -11,6 +11,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@cloudinary/url-gen": "^1.22.0",
     "@convex-dev/auth": "^0.0.90",
     "@hookform/resolvers": "^5.2.2",
     "@jridgewell/trace-mapping": "^0.3.31",
@@ -46,6 +47,7 @@
     "@zumer/snapdom": "^2.0.1",
     "axios": "^1.13.2",
     "class-variance-authority": "^0.7.1",
+    "cloudinary": "^2.11.0",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "convex": "^1.30.0",
