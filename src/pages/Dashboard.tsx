@@ -287,10 +287,9 @@ export default function Dashboard() {
   const [panelVoice, setPanelVoice] = useState<VoiceNoteResult | null>(null);
   const [transcribing, setTranscribing] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [pendingImage, setPendingImage] = useState<{
-    url: string;
-    publicId: string;
-  } | null>(null);
+  const [pendingImages, setPendingImages] = useState<
+    { url: string; publicId: string }[]
+  >([]);
   const [pendingFile, setPendingFile] = useState<{
     url: string;
     name: string;
@@ -298,16 +297,19 @@ export default function Dashboard() {
     size: number;
   } | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadCount, setUploadCount] = useState(0);
   const [generating, setGenerating] = useState(false);
-  const [generatingPrompt, setGeneratingPrompt] = useState("");
   const [dragOver, setDragOver] = useState(false);
-  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const [lightbox, setLightbox] = useState<{
+    images: string[];
+    index: number;
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // ---- File upload: any type, signed upload to Cloudinary ----
-  const uploadFile = async (file: File): Promise<void> => {
-    setUploading(true);
-    setAssistantError(null);
+  // ---- File upload: any type, signed upload to Cloudinary (multi) ----
+  const uploadFile = async (
+    file: File,
+  ): Promise<{ url: string; publicId: string; resourceType: string } | null> => {
     try {
       const signed = await getSignedUploadUrl({ filename: file.name });
 
@@ -335,37 +337,67 @@ export default function Dashboard() {
         resource_type: string;
       };
 
-      if (data.resource_type === "image") {
-        setPendingImage({ url: data.secure_url, publicId: data.public_id });
-      } else {
-        setPendingFile({
-          url: data.secure_url,
-          name: file.name,
-          type: file.type || data.resource_type,
-          size: file.size,
-        });
-      }
+      return {
+        url: data.secure_url,
+        publicId: data.public_id,
+        resourceType: data.resource_type,
+      };
     } catch (err) {
-      setAssistantError(
-        err instanceof Error ? err.message : "Upload failed.",
-      );
+      setAssistantError(err instanceof Error ? err.message : "Upload failed.");
+      return null;
+    }
+  };
+
+  const uploadFiles = async (files: File[]) => {
+    if (files.length === 0) return;
+    setUploading(true);
+    setUploadCount(files.length);
+    setAssistantError(null);
+    try {
+      const results = await Promise.all(files.map((f) => uploadFile(f)));
+      const images: { url: string; publicId: string }[] = [];
+      let firstFile: {
+        url: string;
+        name: string;
+        type: string;
+        size: number;
+      } | null = null;
+
+      results.forEach((r, i) => {
+        if (!r) return;
+        if (r.resourceType === "image") {
+          images.push({ url: r.url, publicId: r.publicId });
+        } else if (!firstFile) {
+          firstFile = {
+            url: r.url,
+            name: files[i].name,
+            type: files[i].type || r.resourceType,
+            size: files[i].size,
+          };
+        }
+      });
+
+      if (images.length > 0) {
+        setPendingImages((prev) => [...prev, ...images]);
+      }
+      if (firstFile) setPendingFile(firstFile);
     } finally {
       setUploading(false);
+      setUploadCount(0);
     }
   };
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = Array.from(e.target.files ?? []);
     e.target.value = "";
-    void uploadFile(file);
+    void uploadFiles(files);
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) void uploadFile(file);
+    const files = Array.from(e.dataTransfer.files ?? []);
+    if (files.length > 0) void uploadFiles(files);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -382,15 +414,14 @@ export default function Dashboard() {
 
   // ---- AI image generation (Cloudinary Image Generation add-on) ----
   const handleGenerateImage = async () => {
-    const prompt = generatingPrompt.trim() || input.trim();
+    const prompt = input.trim();
     if (!prompt || generating) return;
 
     setGenerating(true);
     setAssistantError(null);
-    setGeneratingPrompt("");
     try {
       const { url, publicId } = await generateImageAction({ prompt });
-      setPendingImage({ url, publicId });
+      setPendingImages((prev) => [...prev, { url, publicId }]);
       setInput("");
       inputRef.current?.focus();
     } catch (err) {
@@ -477,13 +508,15 @@ export default function Dashboard() {
     setPanelNlp(null);
     setPanelNews(null);
     setPanelVoice(null);
-    setPendingImage(null);
+    setPendingImages([]);
+    setPendingFile(null);
     player.stop();
   }, [activeId]);
 
   const runSend = async () => {
     const text = input.trim();
-    if ((!text && !pendingImage && !pendingFile) || sending) return;
+    if ((!text && pendingImages.length === 0 && !pendingFile) || sending)
+      return;
 
     setSending(true);
     setAssistantError(null);
@@ -492,8 +525,17 @@ export default function Dashboard() {
     setPanelVoice(null);
     if (recorder.recording) recorder.stop();
 
-    const imagePayload = pendingImage
-      ? { imageUrl: pendingImage.url, imagePublicId: pendingImage.publicId }
+    const hasImages = pendingImages.length > 0;
+    const imagePayload = hasImages
+      ? {
+          images: pendingImages.map((img) => ({
+            url: img.url,
+            publicId: img.publicId,
+          })),
+          // Back-compat single fields for the first image
+          imageUrl: pendingImages[0].url,
+          imagePublicId: pendingImages[0].publicId,
+        }
       : undefined;
     const filePayload = pendingFile
       ? {
@@ -503,12 +545,17 @@ export default function Dashboard() {
           fileSize: pendingFile.size,
         }
       : undefined;
-    setPendingImage(null);
+    setPendingImages([]);
     setPendingFile(null);
     setInput("");
 
     const messageContent =
-      text || (imagePayload ? "[Image]" : filePayload ? `[File: ${filePayload.fileName}]` : "");
+      text ||
+      (hasImages
+        ? "[Image]"
+        : filePayload
+          ? `[File: ${filePayload.fileName}]`
+          : "");
 
     try {
       let sessionId: Id<"chatSessions">;
@@ -1098,19 +1145,47 @@ export default function Dashboard() {
                       {/* Message body */}
                       {m.role === "user" ? (
                         <div className="mt-2 ml-8.5">
-                          {m.imageUrl ? (
-                            <button
-                              onClick={() => setLightboxSrc(m.imageUrl!)}
-                              className="mb-2 block cursor-zoom-in"
-                              title="View full size"
-                            >
-                              <img
-                                src={m.imageUrl}
-                                alt="Uploaded image"
-                                className="max-h-64 w-auto rounded-lg border object-contain transition-opacity hover:opacity-90"
-                              />
-                            </button>
-                          ) : null}
+                          {(() => {
+                            const imgs =
+                              m.images && m.images.length > 0
+                                ? m.images.map((i) => i.url)
+                                : m.imageUrl
+                                  ? [m.imageUrl]
+                                  : [];
+                            if (imgs.length === 0) return null;
+                            return (
+                              <div
+                                className={`mb-2 grid max-w-md gap-1.5 ${
+                                  imgs.length === 1
+                                    ? "grid-cols-1"
+                                    : imgs.length === 2
+                                      ? "grid-cols-2"
+                                      : "grid-cols-3"
+                                }`}
+                              >
+                                {imgs.map((url, i) => (
+                                  <button
+                                    key={url + i}
+                                    onClick={() =>
+                                      setLightbox({ images: imgs, index: i })
+                                    }
+                                    className="block cursor-zoom-in overflow-hidden rounded-lg border"
+                                    title="View full size"
+                                  >
+                                    <img
+                                      src={url}
+                                      alt={`Image ${i + 1}`}
+                                      className={`w-full object-cover transition-opacity hover:opacity-90 ${
+                                        imgs.length === 1
+                                          ? "max-h-64"
+                                          : "h-28"
+                                      }`}
+                                    />
+                                  </button>
+                                ))}
+                              </div>
+                            );
+                          })()}
                           {m.fileUrl ? (
                             <a
                               href={m.fileUrl}
@@ -1235,30 +1310,39 @@ export default function Dashboard() {
                   className="hidden"
                   onChange={handleFileInput}
                 />
-                {/* Previews: image thumbnail + file chip */}
-                {pendingImage || pendingFile ? (
+                {/* Previews: image thumbnails + file chip */}
+                {pendingImages.length > 0 || pendingFile ? (
                   <div className="flex flex-wrap items-center gap-2 px-4 pt-3">
-                    {pendingImage ? (
-                      <div className="relative inline-block">
+                    {pendingImages.map((img, i) => (
+                      <div key={img.url} className="relative inline-block">
                         <button
-                          onClick={() => setLightboxSrc(pendingImage.url)}
+                          onClick={() =>
+                            setLightbox({
+                              images: pendingImages.map((p) => p.url),
+                              index: i,
+                            })
+                          }
                           className="block cursor-zoom-in"
                           title="View full size"
                         >
                           <img
-                            src={pendingImage.url}
-                            alt="Upload preview"
-                            className="h-20 w-auto rounded-lg border object-contain transition-opacity hover:opacity-90"
+                            src={img.url}
+                            alt={`Attachment ${i + 1}`}
+                            className="h-20 w-20 rounded-lg border object-cover transition-opacity hover:opacity-90"
                           />
                         </button>
                         <button
-                          onClick={() => setPendingImage(null)}
+                          onClick={() =>
+                            setPendingImages((prev) =>
+                              prev.filter((_, j) => j !== i),
+                            )
+                          }
                           className="absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full bg-foreground text-background"
                         >
                           <X className="size-3" />
                         </button>
                       </div>
-                    ) : null}
+                    ))}
                     {pendingFile ? (
                       <div className="relative inline-flex max-w-[240px] items-center gap-2 rounded-lg border bg-background px-3 py-2">
                         <FileText className="size-4 shrink-0 text-muted-foreground" />
@@ -1283,18 +1367,21 @@ export default function Dashboard() {
                     <button
                       onClick={() => fileInputRef.current?.click()}
                       disabled={sending || uploading}
-                      title="Attach file (or drag & drop)"
+                      title="Attach files (or drag & drop)"
                       className="inline-flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
                     >
                       {uploading ? (
-                        <Loader2 className="size-3.5 animate-spin" />
+                        <span className="inline-flex items-center gap-1 text-[10px] font-medium tabular-nums">
+                          <Loader2 className="size-3 animate-spin" />
+                          {uploadCount > 1 ? uploadCount : ""}
+                        </span>
                       ) : (
                         <Paperclip className="size-3.5" />
                       )}
                     </button>
                     <button
                       onClick={() => void handleGenerateImage()}
-                      disabled={generating || (!input.trim() && !generatingPrompt.trim())}
+                      disabled={generating || !input.trim()}
                       title="Generate image with AI (uses your message as prompt)"
                       className="inline-flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
                     >
@@ -1350,7 +1437,7 @@ export default function Dashboard() {
                   <Button
                     size="icon-sm"
                     onClick={() => void runSend()}
-                    disabled={(!input.trim() && !pendingImage && !pendingFile) || sending}
+                    disabled={(!input.trim() && pendingImages.length === 0 && !pendingFile) || sending}
                     className="size-7 rounded-lg"
                   >
                     {sending ? (
@@ -1407,9 +1494,10 @@ export default function Dashboard() {
         </main>
       </div>
       <Lightbox
-        src={lightboxSrc}
+        images={lightbox?.images ?? []}
+        startIndex={lightbox?.index ?? 0}
         alt="Chat image"
-        onClose={() => setLightboxSrc(null)}
+        onClose={() => setLightbox(null)}
       />
     </TooltipProvider>
   );

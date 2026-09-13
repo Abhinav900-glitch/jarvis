@@ -113,6 +113,14 @@ export const appendMessage = mutation({
     ),
     imageUrl: v.optional(v.string()),
     imagePublicId: v.optional(v.string()),
+    images: v.optional(
+      v.array(
+        v.object({
+          url: v.string(),
+          publicId: v.optional(v.string()),
+        }),
+      ),
+    ),
     fileUrl: v.optional(v.string()),
     fileName: v.optional(v.string()),
     fileType: v.optional(v.string()),
@@ -138,6 +146,7 @@ export const appendMessage = mutation({
       sources: args.sources,
       imageUrl: args.imageUrl,
       imagePublicId: args.imagePublicId,
+      images: args.images,
       fileUrl: args.fileUrl,
       fileName: args.fileName,
       fileType: args.fileType,
@@ -156,6 +165,14 @@ export const startWithMessage = mutation({
     content: v.string(),
     imageUrl: v.optional(v.string()),
     imagePublicId: v.optional(v.string()),
+    images: v.optional(
+      v.array(
+        v.object({
+          url: v.string(),
+          publicId: v.optional(v.string()),
+        }),
+      ),
+    ),
     fileUrl: v.optional(v.string()),
     fileName: v.optional(v.string()),
     fileType: v.optional(v.string()),
@@ -185,6 +202,7 @@ export const startWithMessage = mutation({
       content: args.content,
       imageUrl: args.imageUrl,
       imagePublicId: args.imagePublicId,
+      images: args.images,
       fileUrl: args.fileUrl,
       fileName: args.fileName,
       fileType: args.fileType,

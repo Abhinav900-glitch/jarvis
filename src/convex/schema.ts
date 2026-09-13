@@ -68,6 +68,14 @@ const schema = defineSchema(
       ),
       imageUrl: v.optional(v.string()),
       imagePublicId: v.optional(v.string()),
+      images: v.optional(
+        v.array(
+          v.object({
+            url: v.string(),
+            publicId: v.optional(v.string()),
+          }),
+        ),
+      ),
       fileUrl: v.optional(v.string()),
       fileName: v.optional(v.string()),
       fileType: v.optional(v.string()),
