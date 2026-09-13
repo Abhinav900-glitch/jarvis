@@ -164,9 +164,90 @@ function NewsPanel({ items }: { items: NewsItem[] }) {
             </span>
           </li>
         ))}
-      </ul>
-    </div>
+      </ul>    </div>
   );
+}
+
+// Region result card component
+function RegionResultCard({ result, onClose }: { result: Record<string, unknown>; onClose: () => void }) {
+  const Close = () => (
+    <button onClick={onClose} className="rounded p-0.5 text-muted-foreground hover:text-foreground"><X className="size-3" /></button>
+  );
+
+  if (result.type === "time") {
+    return (
+      <div className="space-y-1">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">World Time</span>
+          <Close />
+        </div>
+        <p className="text-2xl font-mono font-semibold tabular-nums">{String(result.time)}</p>
+        <p className="text-xs text-muted-foreground">{String(result.dayOfWeek)}, {String(result.date)} · {String(result.timezone)} ({String(result.offset)})</p>
+      </div>
+    );
+  }
+
+  if (result.type === "weather") {
+    return (
+      <div className="space-y-1">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">Weather</span>
+          <Close />
+        </div>
+        <div className="flex items-baseline gap-3">
+          <span className="text-2xl">{String(result.icon)}</span>
+          <span className="text-2xl font-semibold">{String(result.temp)}°C</span>
+          <span className="text-xs text-muted-foreground">feels like {String(result.feelsLike)}°C</span>
+        </div>
+        <p className="text-xs text-muted-foreground">{String(result.description)} · {String(result.city)}, {String(result.country)} · 💧 {String(result.humidity)}% · 💨 {String(result.wind)} km/h</p>
+      </div>
+    );
+  }
+
+  if (result.type === "currency") {
+    return (
+      <div className="space-y-1">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">Currency</span>
+          <Close />
+        </div>
+        <p className="text-2xl font-semibold tabular-nums">{String(result.amount)} {String(result.from)} = <span className="text-primary">{String(result.result)} {String(result.to)}</span></p>
+        <p className="text-xs text-muted-foreground">1 {String(result.from)} = {String(result.rate)} {String(result.to)}</p>
+      </div>
+    );
+  }
+
+  if (result.type === "country") {
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">Country</span>
+          <Close />
+        </div>
+        <div className="flex items-baseline gap-2">
+          <span className="text-xl">{String(result.flag)}</span>
+          <span className="text-lg font-semibold">{String(result.name)}</span>
+        </div>
+        <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
+          <div><span className="text-muted-foreground">Official:</span> {String(result.officialName)}</div>
+          <div><span className="text-muted-foreground">Capital:</span> {String(result.capital)}</div>
+          <div><span className="text-muted-foreground">Region:</span> {String(result.region)}{result.subregion ? ` / ${String(result.subregion)}` : ""}</div>
+          <div><span className="text-muted-foreground">Population:</span> {typeof result.population === "number" ? result.population.toLocaleString() : String(result.population)}</div>
+          <div><span className="text-muted-foreground">Area:</span> {typeof result.area === "number" ? result.area.toLocaleString() : String(result.area)} km²</div>
+          <div><span className="text-muted-foreground">Languages:</span> {Array.isArray(result.languages) ? (result.languages as string[]).join(", ") : String(result.languages)}</div>
+          <div><span className="text-muted-foreground">Currencies:</span> {Array.isArray(result.currencies) ? (result.currencies as string[]).join(", ") : String(result.currencies)}</div>
+          <div><span className="text-muted-foreground">Timezones:</span> {Array.isArray(result.timezones) ? (result.timezones as string[]).slice(0, 3).join(", ") : String(result.timezones)}{Array.isArray(result.timezones) && (result.timezones as string[]).length > 3 ? ` +${(result.timezones as string[]).length - 3} more` : ""}</div>
+        </div>
+        {result.maps ? (
+          <a href={String(result.maps)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-primary underline-offset-2 hover:underline">
+            Open in Maps
+          </a>
+        ) : null}
+      </div>
+    );
+  }
+
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -249,8 +330,7 @@ function VoicePanel({
           value={note.sentiment.negative}
           tone="bg-destructive/60"
         />
-      </div>
-    </div>
+      </div>    </div>
   );
 }
 
@@ -1626,79 +1706,9 @@ export default function Dashboard() {
                       <Loader2 className="size-3 animate-spin" /> Loading region data…
                     </div>
                   )}
-                  {regionResult && !regionBusy && (() => {
-                    const r = regionResult as Record<string, unknown>;
-                    if (r.type === "time") {
-                      return (
-                        <div className="space-y-1">
-                          <div className="flex items-center justify-between">
-                            <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">World Time</span>
-                            <button onClick={() => setRegionResult(null)} className="rounded p-0.5 text-muted-foreground hover:text-foreground"><X className="size-3" /></button>
-                          </div>
-                          <p className="text-2xl font-mono font-semibold tabular-nums">{String(r.time)}</p>
-                          <p className="text-xs text-muted-foreground">{String(r.dayOfWeek)}, {String(r.date)} · {String(r.timezone)} ({String(r.offset)})</p>
-                        </div>
-                      );
-                    }
-                    if (r.type === "weather") {
-                      return (
-                        <div className="space-y-1">
-                          <div className="flex items-center justify-between">
-                            <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">Weather</span>
-                            <button onClick={() => setRegionResult(null)} className="rounded p-0.5 text-muted-foreground hover:text-foreground"><X className="size-3" /></button>
-                          </div>
-                          <div className="flex items-baseline gap-3">
-                            <span className="text-2xl">{String(r.icon)}</span>
-                            <span className="text-2xl font-semibold">{String(r.temp)}°C</span>
-                            <span className="text-xs text-muted-foreground">feels like {String(r.feelsLike)}°C</span>
-                          </div>
-                          <p className="text-xs text-muted-foreground">{String(r.description)} · {String(r.city)}, {String(r.country)} · 💧 {String(r.humidity)}% · 💨 {String(r.wind)} km/h</p>
-                        </div>
-                      );
-                    }
-                    if (r.type === "currency") {
-                      return (
-                        <div className="space-y-1">
-                          <div className="flex items-center justify-between">
-                            <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">Currency</span>
-                            <button onClick={() => setRegionResult(null)} className="rounded p-0.5 text-muted-foreground hover:text-foreground"><X className="size-3" /></button>
-                          </div>
-                          <p className="text-2xl font-semibold tabular-nums">{String(r.amount)} {String(r.from)} = <span className="text-primary">{String(r.result)} {String(r.to)}</span></p>
-                          <p className="text-xs text-muted-foreground">1 {String(r.from)} = {String(r.rate)} {String(r.to)}</p>
-                        </div>
-                      );
-                    }
-                    if (r.type === "country") {
-                      return (
-                        <div className="space-y-2">
-                          <div className="flex items-center justify-between">
-                            <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">Country</span>
-                            <button onClick={() => setRegionResult(null)} className="rounded p-0.5 text-muted-foreground hover:text-foreground"><X className="size-3" /></button>
-                          </div>
-                          <div className="flex items-baseline gap-2">
-                            <span className="text-xl">{String(r.flag)}</span>
-                            <span className="text-lg font-semibold">{String(r.name)}</span>
-                          </div>
-                          <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
-                            <div><span className="text-muted-foreground">Official:</span> {String(r.officialName)}</div>
-                            <div><span className="text-muted-foreground">Capital:</span> {String(r.capital)}</div>
-                            <div><span className="text-muted-foreground">Region:</span> {String(r.region)}{r.subregion ? ` / ${String(r.subregion)}` : ""}</div>
-                            <div><span className="text-muted-foreground">Population:</span> {typeof r.population === "number" ? r.population.toLocaleString() : String(r.population)}</div>
-                            <div><span className="text-muted-foreground">Area:</span> {typeof r.area === "number" ? r.area.toLocaleString() : String(r.area)} km²</div>
-                            <div><span className="text-muted-foreground">Languages:</span> {Array.isArray(r.languages) ? r.languages.join(", ") : String(r.languages)}</div>
-                            <div><span className="text-muted-foreground">Currencies:</span> {Array.isArray(r.currencies) ? r.currencies.join(", ") : String(r.currencies)}</div>
-                            <div><span className="text-muted-foreground">Timezones:</span> {Array.isArray(r.timezones) ? r.timezones.slice(0, 3).join(", ") : String(r.timezones)}{Array.isArray(r.timezones) && r.timezones.length > 3 ? ` +${(r.timezones as string[]).length - 3} more` : ""}</div>
-                          </div>
-                          {r.maps ? (
-                            <a href={String(r.maps)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-primary underline-offset-2 hover:underline">
-                              Open in Maps ↗
-                            </a>
-                          ) : null}
-                        </div>
-                      );
-                    }
-                    return null;
-                  })()}
+                  {regionResult && !regionBusy && (
+                    <RegionResultCard result={regionResult} onClose={() => setRegionResult(null)} />
+                  )}
                 </div>
               </motion.div>
             )}
