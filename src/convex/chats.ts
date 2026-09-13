@@ -213,3 +213,74 @@ export const startWithMessage = mutation({
     return { sessionId, messageId };
   },
 });
+
+// ---------------------------------------------------------------------------
+// Edit / delete messages
+// ---------------------------------------------------------------------------
+
+export const editMessage = mutation({
+  args: {
+    messageId: v.id("chatMessages"),
+    content: v.string(),
+    imageUrl: v.optional(v.string()),
+    imagePublicId: v.optional(v.string()),
+    images: v.optional(
+      v.array(
+        v.object({
+          url: v.string(),
+          publicId: v.optional(v.string()),
+        }),
+      ),
+    ),
+    fileUrl: v.optional(v.string()),
+    fileName: v.optional(v.string()),
+    fileType: v.optional(v.string()),
+    fileSize: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) throw new Error("Not signed in.");
+
+    const msg = await ctx.db.get(args.messageId);
+    if (!msg || msg.userId !== userId) throw new Error("Message not found.");
+    if (msg.role !== "user") throw new Error("Can only edit user messages.");
+
+    // Delete all messages after this one (the assistant reply + any follow-ups)
+    const laterMessages = await ctx.db
+      .query("chatMessages")
+      .withIndex("by_session", (q) => q.eq("sessionId", msg.sessionId))
+      .filter((q) => q.gt(q.field("createdAt"), msg.createdAt))
+      .collect();
+    for (const m of laterMessages) {
+      await ctx.db.delete(m._id);
+    }
+
+    // Update the user message content
+    await ctx.db.patch(args.messageId, {
+      content: args.content,
+      imageUrl: args.imageUrl,
+      imagePublicId: args.imagePublicId,
+      images: args.images,
+      fileUrl: args.fileUrl,
+      fileName: args.fileName,
+      fileType: args.fileType,
+      fileSize: args.fileSize,
+    });
+
+    await ctx.db.patch(msg.sessionId, { updatedAt: Date.now() });
+    return { sessionId: msg.sessionId };
+  },
+});
+
+export const deleteMessage = mutation({
+  args: { messageId: v.id("chatMessages") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) throw new Error("Not signed in.");
+
+    const msg = await ctx.db.get(args.messageId);
+    if (!msg || msg.userId !== userId) throw new Error("Message not found.");
+
+    await ctx.db.delete(args.messageId);
+  },
+});

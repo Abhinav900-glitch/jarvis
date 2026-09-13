@@ -130,7 +130,7 @@ async function generateViaCloudinary(
 
 /**
  * Provider 2 — Hugging Face Inference API (FLUX.1-schnell, non-gated).
- * Returns raw PNG bytes, which we then store on Cloudinary.
+ * Returns raw PNG bytes, which we store on Cloudinary for a persistent URL.
  */
 async function generateViaHuggingFace(
   prompt: string,
@@ -164,7 +164,6 @@ async function generateViaHuggingFace(
 
   const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.startsWith("image/")) {
-    // HF sometimes returns JSON errors with 200; check the body type.
     throw new Error("Hugging Face returned a non-image response.");
   }
 
@@ -174,36 +173,39 @@ async function generateViaHuggingFace(
   }
 
   const publicId = `jarvis-gen/hf-${Date.now()}`;
-  const stored = await uploadBytesToCloudinary(bytes, publicId);
-  return { url: stored.url, publicId: stored.publicId, provider: "huggingface" };
+  try {
+    const stored = await uploadBytesToCloudinary(bytes, publicId);
+    return { url: stored.url, publicId: stored.publicId, provider: "huggingface" };
+  } catch {
+    // If Cloudinary upload fails, return a data URL so the client can still display it
+    const base64 = Buffer.from(bytes).toString("base64");
+    const dataUrl = `data:image/png;base64,${base64}`;
+    return { url: dataUrl, publicId, provider: "huggingface" };
+  }
 }
 
 /**
  * Provider 3 — Pollinations AI (free, no key required). Final fallback.
- * Returns a JPEG, which we store on Cloudinary.
+ * Returns a direct URL — Pollinations serves images publicly, no need to re-upload.
  */
 async function generateViaPollinations(
   prompt: string,
 ): Promise<GeneratedImage> {
   const encoded = encodeURIComponent(prompt.slice(0, 800));
-  const url = `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024&nologo=true&model=flux`;
+  const pollinationsUrl = `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024&nologo=true&model=flux&seed=${Date.now()}`;
 
-  const res = await fetch(url, {
-    headers: { Accept: "image/jpeg" },
-  });
-  if (!res.ok) {
-    console.error("Pollinations image error", res.status);
-    throw new Error(`Pollinations generation failed (${res.status})`);
+  // Verify the URL actually returns an image (HEAD check)
+  const check = await fetch(pollinationsUrl, { method: "HEAD" }).catch(() => null);
+  if (!check || !check.ok) {
+    throw new Error(`Pollinations generation failed (${check?.status ?? "network error"})`);
   }
 
-  const bytes = await res.arrayBuffer();
-  if (bytes.byteLength < 1000) {
-    throw new Error("Pollinations returned an empty image.");
-  }
-
-  const publicId = `jarvis-gen/poll-${Date.now()}`;
-  const stored = await uploadBytesToCloudinary(bytes, publicId);
-  return { url: stored.url, publicId: stored.publicId, provider: "pollinations" };
+  // Use the Pollinations URL directly — it's a public CDN
+  return {
+    url: pollinationsUrl,
+    publicId: `jarvis-gen/poll-${Date.now()}`,
+    provider: "pollinations",
+  };
 }
 
 /**
@@ -254,14 +256,10 @@ export const getSignedUploadUrl = action({
  *   1. Cloudinary Image Generation add-on (best quality, needs add-on)
  *   2. Hugging Face Inference API (FLUX.1-schnell — uses HUGGING_FACE_TOKEN)
  *   3. Pollinations AI (free, no key needed — always-available last resort)
- *
- * HF and Pollinations outputs are stored on Cloudinary so every image gets
- * a persistent CDN URL.
  */
 export const generateImage = action({
   args: {
     prompt: v.string(),
-    // Optional Cloudinary add-on model hint (ignored by fallback providers).
     model: v.optional(
       v.union(
         v.literal("default"),

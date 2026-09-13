@@ -13,6 +13,7 @@ import {
   Mic,
   Menu,
   Newspaper,
+  Pencil,
   Paperclip,
   Plus,
   RotateCcw,
@@ -297,6 +298,9 @@ export default function Dashboard() {
     size: number;
   } | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [editingId, setEditingId] = useState<Id<"chatMessages"> | null>(null);
+
+  const editMessage = useMutation(api.chats.editMessage);
   const [uploadCount, setUploadCount] = useState(0);
   const [generating, setGenerating] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -516,8 +520,16 @@ export default function Dashboard() {
     setPanelVoice(null);
     setPendingImages([]);
     setPendingFile(null);
+    setEditingId(null);
     player.stop();
   }, [activeId]);
+
+  // Edit a user message: load into input, delete all later messages
+  const handleEditMessage = async (msgId: Id<"chatMessages">, content: string) => {
+    setEditingId(msgId);
+    setInput(content);
+    inputRef.current?.focus();
+  };
 
   const runSend = async () => {
     const text = input.trim();
@@ -567,7 +579,21 @@ export default function Dashboard() {
       let sessionId: Id<"chatSessions">;
       let history: { role: string; content: string }[] = [];
 
-      if (!activeId) {
+      if (editingId) {
+        // Edit flow: update the existing message, which also deletes later messages
+        const result = await editMessage({
+          messageId: editingId,
+          content: messageContent,
+          ...imagePayload,
+          ...filePayload,
+        });
+        sessionId = result.sessionId;
+        setEditingId(null);
+        history = (messages ?? [])
+          .filter((m) => m._id !== editingId)
+          .slice(-12)
+          .map((m) => ({ role: m.role, content: m.content }));
+      } else if (!activeId) {
         const { sessionId: sid } = await startWithMessage({
           content: messageContent,
           ...imagePayload,
@@ -606,7 +632,8 @@ export default function Dashboard() {
           sources,
         });
       } else {
-        const answer = await runAsk(text, history);
+        const visionUrls = imagePayload?.images?.map((i) => i.url);
+        const answer = await runAsk(text, history, visionUrls && visionUrls.length > 0 ? visionUrls : undefined);
         await appendMessage({
           sessionId,
           role: "assistant",
@@ -631,8 +658,9 @@ export default function Dashboard() {
   const runAsk = async (
     prompt: string,
     history: { role: string; content: string }[],
+    imageUrls?: string[],
   ) => {
-    return await askAction({ prompt, history });
+    return await askAction({ prompt, history, imageUrls });
   };
 
   const runDeepResearch = async (
@@ -1111,6 +1139,15 @@ export default function Dashboard() {
                         <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
                           {m.role === "user" ? "You" : "Jarvis"}
                         </span>
+                        {m.role === "user" && !sending && (
+                          <button
+                            onClick={() => void handleEditMessage(m._id, m.content)}
+                            title="Edit this message"
+                            className="ml-auto rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+                          >
+                            <Pencil className="size-3" />
+                          </button>
+                        )}
                         {m.role === "assistant" && (
                           <span className="ml-auto flex items-center gap-2 text-[10px] text-muted-foreground">
                             {m.usedSearch || m.usedFallback ? (
@@ -1415,9 +1452,11 @@ export default function Dashboard() {
                     placeholder={
                       recorder.recording
                         ? "Listening… click the stop square when done."
-                        : deepResearch
-                          ? "Research anything on the live web…"
-                          : "Message Jarvis…"
+                        : editingId
+                          ? "Edit your message and press Enter…"
+                          : deepResearch
+                            ? "Research anything on the live web…"
+                            : "Message Jarvis…"
                     }
                     rows={1}
                     className="max-h-40 w-full resize-none bg-transparent pl-20 pr-24 py-3 text-sm outline-none placeholder:text-muted-foreground/70"

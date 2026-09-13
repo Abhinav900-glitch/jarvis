@@ -10,7 +10,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 
 interface ChatTurn {
   role: "user" | "assistant" | "system";
-  content: string;
+  content: string | Array<{ type: string; text?: string; image_url?: { url: string } }>;
 }
 
 export interface LlmResult {
@@ -33,16 +33,48 @@ const JARVIS_PROMPT =
   "You are Jarvis, a calm, precise AI assistant. Answer clearly and concisely using short paragraphs. " +
   "Format every response in GitHub-flavored Markdown: use **bold** for key terms, bullet lists for enumerations, " +
   "tables for comparisons, and fenced code blocks with a language tag (```python, ```ts, ...) for any code. " +
-  "When research material from web search results is provided in the user message, ground your answer in that material and cite sources inline as [n].";
+  "When research material from web search results is provided in the user message, ground your answer in that material and cite sources inline as [n]." +
+  "If the user message includes an image, describe and analyze the image in detail before answering the question.";
+
+/**
+ * Build the user message content, optionally including vision content
+ * when image URLs are provided.
+ */
+function buildUserContent(
+  text: string,
+  imageUrls?: string[],
+): string | Array<{ type: string; text?: string; image_url?: { url: string } }> {
+  if (!imageUrls || imageUrls.length === 0) {
+    return text;
+  }
+
+  const parts: Array<{ type: string; text?: string; image_url?: { url: string } }> = [];
+
+  // Add the text prompt
+  if (text) {
+    parts.push({ type: "text", text });
+  } else {
+    parts.push({ type: "text", text: "Describe this image in detail." });
+  }
+
+  // Add each image
+  for (const url of imageUrls) {
+    parts.push({
+      type: "image_url",
+      image_url: { url },
+    });
+  }
+
+  return parts;
+}
 
 async function callGroq(
   key: string,
   turns: ChatTurn[],
 ): Promise<LlmResult> {
-  // Reasoning model first (higher quality), then a fast non-reasoning model.
-  // gpt-oss burns tokens on hidden reasoning, so the budget is generous and an
-  // empty content (all tokens spent reasoning) retries with the next model.
+  // Vision-capable model first (when images present), then reasoning, then fast.
   const models = [
+    { id: "meta-llama/llama-4-scout-17b-16e-instruct", label: "llama-4-scout" },
     { id: "openai/gpt-oss-120b", label: "gpt-oss-120b" },
     { id: "qwen/qwen3.8-27b", label: "qwen3.8-27b" },
   ];
@@ -91,6 +123,17 @@ async function callHuggingFace(
 
   const failures: string[] = [];
   for (const m of models) {
+    // HF doesn't support image content, so convert to text-only
+    const textTurns = turns.map((t) => ({
+      ...t,
+      content: typeof t.content === "string"
+        ? t.content
+        : t.content
+            .filter((p) => p.type === "text")
+            .map((p) => p.text ?? "")
+            .join(""),
+    }));
+
     const res = await fetch("https://router.huggingface.co/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -99,7 +142,7 @@ async function callHuggingFace(
       },
       body: JSON.stringify({
         model: m.id,
-        messages: [{ role: "system", content: JARVIS_PROMPT }, ...turns],
+        messages: [{ role: "system", content: JARVIS_PROMPT }, ...textTurns],
         temperature: 0.6,
         max_tokens: 1500,
       }),
@@ -129,6 +172,7 @@ export const ask = action({
         v.object({ role: v.string(), content: v.string() }),
       ),
     ),
+    imageUrls: v.optional(v.array(v.string())),
   },
   handler: async (_ctx, args): Promise<LlmResult> => {
     const userId = await getAuthUserId(_ctx);
@@ -143,11 +187,13 @@ export const ask = action({
     const groqKey = process.env.GROQ_API_KEY;
     const hfToken = process.env.HUGGING_FACE_TOKEN;
 
+    const userContent = buildUserContent(args.prompt, args.imageUrls);
+
     const failures: string[] = [];
 
     if (groqKey) {
       try {
-        return await callGroq(groqKey, [...history, { role: "user", content: args.prompt }]);
+        return await callGroq(groqKey, [...history, { role: "user", content: userContent }]);
       } catch (err) {
         failures.push(`groq: ${err instanceof Error ? err.message : "unknown error"}`);
       }
@@ -159,7 +205,7 @@ export const ask = action({
       try {
         return await callHuggingFace(hfToken, [
           ...history,
-          { role: "user", content: args.prompt },
+          { role: "user", content: userContent },
         ]);
       } catch (err) {
         failures.push(`huggingface: ${err instanceof Error ? err.message : "unknown error"}`);
@@ -235,12 +281,7 @@ export const deepResearch = action({
       .slice(-12)
       .map((t) => ({ role: t.role as ChatTurn["role"], content: t.content }));
 
-    const prompt = `Research this topic using the web results below. Answer in a clear, structured summary and cite sources inline as [1], [2], etc.
-
-Web results:
-${context}
-
-Topic: ${args.query}`;
+    const prompt = `Research this topic using the web results below. Answer in a clear, structured summary and cite sources inline as [1], [2], etc.\n\nWeb results:\n${context}\n\nTopic: ${args.query}`;
 
     const failures: string[] = [];
 
