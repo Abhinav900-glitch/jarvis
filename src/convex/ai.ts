@@ -441,3 +441,106 @@ export const searchNews = action({
     }));
   },
 });
+
+// ---------------------------------------------------------------------------
+// Summarize URL — fetch a webpage and have Jarvis summarize it
+// ---------------------------------------------------------------------------
+
+export const summarizeUrl = action({
+  args: {
+    url: v.string(),
+    history: v.optional(
+      v.array(
+        v.object({ role: v.string(), content: v.string() }),
+      ),
+    ),
+  },
+  handler: async (_ctx, args): Promise<LlmResult> => {
+    const userId = await getAuthUserId(_ctx);
+    if (userId === null) throw new Error("Sign in to summarize a URL.");
+
+    const url = args.url.trim();
+    if (!url) throw new Error("URL is empty.");
+    if (!/^https?:\/\//.test(url)) throw new Error("Please enter a valid URL starting with http:// or https://.");
+
+    // Fetch the webpage content
+    let html: string;
+    try {
+      const res = await fetch(url, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (compatible; JarvisBot/1.0)",
+          Accept: "text/html,application/xhtml+xml",
+        },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      html = await res.text();
+    } catch (err) {
+      throw new Error(`Failed to fetch URL: ${err instanceof Error ? err.message : "network error"}`);
+    }
+
+    // Extract readable text from HTML
+    const text = extractReadableText(html);
+    if (text.length < 50) {
+      throw new Error("The page didn't contain enough readable text to summarize.");
+    }
+
+    // Truncate to ~6000 chars to fit context window
+    const truncated = text.length > 6000 ? text.slice(0, 6000) + "\n\n[Content truncated...]" : text;
+
+    const history = (args.history ?? [])
+      .slice(-8)
+      .map((t) => ({ role: t.role as ChatTurn["role"], content: t.content }));
+
+    const prompt = `Summarize the following webpage content clearly and concisely. Include the page title, key points, and any important details. Format in Markdown.
+
+URL: ${url}
+
+Page content:
+${truncated}`;
+
+    const groqKey = process.env.GROQ_API_KEY;
+    const hfToken = process.env.HUGGING_FACE_TOKEN;
+    const failures: string[] = [];
+
+    if (groqKey) {
+      try {
+        return await callGroq(groqKey, [...history, { role: "user", content: prompt }]);
+      } catch (err) {
+        failures.push(`groq: ${err instanceof Error ? err.message : "unknown"}`);
+      }
+    }
+
+    if (hfToken) {
+      try {
+        return await callHuggingFace(hfToken, [...history, { role: "user", content: prompt }]);
+      } catch (err) {
+        failures.push(`huggingface: ${err instanceof Error ? err.message : "unknown"}`);
+      }
+    }
+
+    throw new Error(`All models failed. ${failures.join(" · ")}`);
+  },
+});
+
+/**
+ * Extract readable text from HTML by stripping tags, scripts, and styles.
+ */
+function extractReadableText(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<nav[\s\S]*?<\/nav>/gi, "")
+    .replace(/<header[\s\S]*?<\/header>/gi, "")
+    .replace(/<footer[\s\S]*?<\/footer>/gi, "")
+    .replace(/<aside[\s\S]*?<\/aside>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}

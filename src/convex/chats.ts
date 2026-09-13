@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import type { Id } from "./_generated/dataModel";
 
 // ---------------------------------------------------------------------------
 // Sessions
@@ -282,5 +283,57 @@ export const deleteMessage = mutation({
     if (!msg || msg.userId !== userId) throw new Error("Message not found.");
 
     await ctx.db.delete(args.messageId);
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Search sessions and messages
+// ---------------------------------------------------------------------------
+
+export const searchSessions = query({
+  args: { query: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) return [];
+
+    const q = args.query.toLowerCase().trim();
+    if (!q) return [];
+
+    // Search session titles
+    const sessions = await ctx.db
+      .query("chatSessions")
+      .withIndex("by_user", (qb) => qb.eq("userId", userId))
+      .collect();
+
+    const matchedSessions = sessions
+      .filter((s) => s.title.toLowerCase().includes(q))
+      .slice(0, 10)
+      .map((s) => ({ type: "session" as const, id: s._id, title: s.title, updatedAt: s.updatedAt }));
+
+    // Search message content
+    const allMessages: { type: "message"; sessionId: Id<"chatSessions">; content: string; role: string; createdAt: number }[] = [];
+    for (const session of sessions) {
+      const msgs = await ctx.db
+        .query("chatMessages")
+        .withIndex("by_session", (qb) => qb.eq("sessionId", session._id))
+        .collect();
+      for (const m of msgs) {
+        if (m.content.toLowerCase().includes(q)) {
+          allMessages.push({
+            type: "message",
+            sessionId: session._id,
+            content: m.content.slice(0, 200),
+            role: m.role,
+            createdAt: m.createdAt,
+          });
+        }
+      }
+    }
+
+    const matchedMessages = allMessages
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, 10);
+
+    return { sessions: matchedSessions, messages: matchedMessages };
   },
 });

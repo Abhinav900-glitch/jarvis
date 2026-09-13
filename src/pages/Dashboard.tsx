@@ -5,11 +5,13 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowUp,
   Check,
+  Download,
   FileText,
   Globe,
   ImagePlus,
   Languages,
   Loader2,
+  Link2,
   Mic,
   Menu,
   Newspaper,
@@ -17,6 +19,7 @@ import {
   Paperclip,
   Plus,
   RotateCcw,
+  Search,
   Settings,
   Sparkles,
   Square,
@@ -277,6 +280,7 @@ export default function Dashboard() {
   const speakAction = useAction(api.voice.speak);
   const getSignedUploadUrl = useAction(api.cloudinary.getSignedUploadUrl);
   const generateImageAction = useAction(api.cloudinary.generateImage);
+  const summarizeUrlAction = useAction(api.ai.summarizeUrl);
 
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -299,8 +303,16 @@ export default function Dashboard() {
   } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [editingId, setEditingId] = useState<Id<"chatMessages"> | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [showSearch, setShowSearch] = useState(false);
+  const [summarizingUrl, setSummarizingUrl] = useState(false);
+  const [summarizeInput, setSummarizeInput] = useState("");
 
   const editMessage = useMutation(api.chats.editMessage);
+  const searchSessionsQuery = useQuery(
+    api.chats.searchSessions,
+    searchQuery.length >= 2 ? { query: searchQuery } : "skip",
+  );
   const [uploadCount, setUploadCount] = useState(0);
   const [generating, setGenerating] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -708,6 +720,74 @@ export default function Dashboard() {
     navigate("/");
   };
 
+  // --- Summarize URL ---
+  const handleSummarizeUrl = async () => {
+    const url = summarizeInput.trim();
+    if (!url || summarizingUrl) return;
+    setSummarizingUrl(true);
+    setAssistantError(null);
+    setSummarizeInput("");
+    try {
+      // Create a session if needed
+      let sessionId = activeId;
+      if (!sessionId) {
+        const { sessionId: sid } = await startWithMessage({
+          content: `Summarize: ${url}`,
+        });
+        sessionId = sid;
+        setActiveId(sid);
+      } else {
+        await appendMessage({
+          sessionId,
+          role: "user",
+          content: `Summarize: ${url}`,
+        });
+      }
+      const history = (messages ?? []).map((m) => ({
+        role: m.role,
+        content: m.content,
+      }));
+      const answer = await summarizeUrlAction({ url, history });
+      await appendMessage({
+        sessionId,
+        role: "assistant",
+        content: answer.text,
+        model: answer.model,
+        usedFallback: answer.usedFallback,
+        usedSearch: false,
+      });
+    } catch (err) {
+      setAssistantError(
+        err instanceof Error ? err.message : "Failed to summarize URL.",
+      );
+    } finally {
+      setSummarizingUrl(false);
+    }
+  };
+
+  // --- Export chat as Markdown ---
+  const handleExportChat = () => {
+    if (!messages || messages.length === 0) return;
+    const lines = messages.map((m) => {
+      const role = m.role === "user" ? "**You**" : "**Jarvis**";
+      const meta = m.model ? ` _(${m.model})_` : "";
+      const imgs = m.images && m.images.length > 0
+        ? m.images.map((i) => `![image](${i.url})`).join("\n")
+        : m.imageUrl
+          ? `![image](${m.imageUrl})`
+          : "";
+      const file = m.fileUrl ? `\n[Attachment: ${m.fileName ?? "file"}](${m.fileUrl})` : "";
+      return `${role}${meta}:\n${imgs ? imgs + "\n" : ""}${m.content}${file}`;
+    });
+    const md = `# Jarvis Chat\n\n${lines.join("\n\n---\n\n")}`;
+    const blob = new Blob([md], { type: "text/markdown" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `jarvis-chat-${new Date().toISOString().slice(0, 10)}.md`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
   // --- Voice output: Groq TTS → browser SpeechSynthesis fallback ---
   const browserSpeakRef = useRef<SpeechSynthesisUtterance | null>(null);
 
@@ -1015,6 +1095,19 @@ export default function Dashboard() {
                     ) : null}
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => setShowSearch((v) => !v)}>
+                    <Search className="size-4" />
+                    Search conversations
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => { setSummarizeInput("https://"); }}>
+                    <Link2 className="size-4" />
+                    Summarize URL
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleExportChat} disabled={!messages || messages.length === 0}>
+                    <Download className="size-4" />
+                    Export chat
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={handleAnalyze} disabled={!lastMsg}>
                     <Languages className="size-4" />
                     Analyze last message
@@ -1287,6 +1380,77 @@ export default function Dashboard() {
             )}
           </div>
 
+          {/* ---- Search panel ---- */}
+          <AnimatePresence>
+            {showSearch && (
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 8 }}
+                transition={{ duration: 0.2 }}
+                className="border-t px-6 py-3"
+              >
+                <div className="mx-auto max-w-2xl">
+                  <div className="mb-2 flex items-center gap-2">
+                    <Search className="size-3.5 text-muted-foreground" />
+                    <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">Search conversations</span>
+                    <button onClick={() => { setShowSearch(false); setSearchQuery(""); }} className="ml-auto rounded p-0.5 text-muted-foreground hover:text-foreground">
+                      <X className="size-3" />
+                    </button>
+                  </div>
+                  <input
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search across all chats…"
+                    className="mb-2 w-full rounded-lg border bg-transparent px-3 py-2 text-sm outline-none placeholder:text-muted-foreground/50 focus:border-foreground/30"
+                    autoFocus
+                  />
+                  {searchSessionsQuery && !Array.isArray(searchSessionsQuery) && (
+                    <div className="max-h-48 space-y-2 overflow-y-auto">
+                      {searchSessionsQuery.sessions.length > 0 && (
+                        <div>
+                          <p className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">Sessions</p>
+                          <ul className="mt-1 space-y-1">
+                            {searchSessionsQuery.sessions.map((s) => (
+                              <li key={s.id}>
+                                <button
+                                  onClick={() => { setActiveId(s.id); setShowSearch(false); setSearchQuery(""); }}
+                                  className="w-full truncate rounded px-2 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-accent"
+                                >
+                                  {s.title}
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {searchSessionsQuery.messages.length > 0 && (
+                        <div>
+                          <p className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">Messages</p>
+                          <ul className="mt-1 space-y-1">
+                            {searchSessionsQuery.messages.map((m, i) => (
+                              <li key={i}>
+                                <button
+                                  onClick={() => { setActiveId(m.sessionId); setShowSearch(false); setSearchQuery(""); }}
+                                  className="w-full rounded px-2 py-1.5 text-left text-xs transition-colors hover:bg-accent"
+                                >
+                                  <span className="text-muted-foreground">[{m.role}]</span> {m.content}
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {searchSessionsQuery.sessions.length === 0 && searchSessionsQuery.messages.length === 0 && (
+                        <p className="text-xs text-muted-foreground">No results found.</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           {/* ---- Panel (NLP / news / voice / errors) ---- */}
           <AnimatePresence>
             {(panelNlp || panelNews || panelVoice || assistantError) && (
@@ -1414,6 +1578,29 @@ export default function Dashboard() {
                     ) : null}
                   </div>
                 ) : null}
+                {/* URL summarize input */}
+                {summarizeInput && (
+                  <div className="flex items-center gap-2 px-4 pt-3">
+                    <Link2 className="size-3.5 shrink-0 text-muted-foreground" />
+                    <input
+                      value={summarizeInput}
+                      onChange={(e) => setSummarizeInput(e.target.value)}
+                      placeholder="Paste a URL to summarize…"
+                      className="flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground/50"
+                      autoFocus
+                    />
+                    <button
+                      onClick={() => void handleSummarizeUrl()}
+                      disabled={summarizingUrl || !summarizeInput.trim()}
+                      className="rounded bg-accent px-2 py-0.5 text-[10px] font-medium text-foreground transition-colors hover:bg-accent/80 disabled:opacity-40"
+                    >
+                      {summarizingUrl ? <Loader2 className="size-3 animate-spin" /> : "Go"}
+                    </button>
+                    <button onClick={() => setSummarizeInput("")} className="rounded p-0.5 text-muted-foreground hover:text-foreground">
+                      <X className="size-3" />
+                    </button>
+                  </div>
+                )}
                 <div className="relative flex items-end">
                   <div className="absolute left-1.5 bottom-2 flex items-center gap-0.5">
                     <button
