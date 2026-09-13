@@ -107,6 +107,12 @@ export default function Landing() {
 
       {/* Hero */}
       <section className="mx-auto w-full max-w-5xl px-6 pt-16 pb-20 sm:pt-24">
+        <motion.div {...fadeUp} className="mb-8 inline-flex">
+          <div className="relative flex size-16 items-center justify-center rounded-2xl border bg-card">
+            <JarvisIcon className="size-8" animate />
+            <span className="absolute -top-1 -right-1 size-2.5 rounded-full bg-foreground/80 animate-pulse" />
+          </div>
+        </motion.div>
         <motion.p {...fadeUp} className="text-xs font-medium tracking-[0.2em] text-muted-foreground uppercase">
           Personal AI · Version 1
         </motion.p>

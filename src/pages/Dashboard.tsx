@@ -1,34 +1,50 @@
 import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import type { Id } from "@/convex/_generated/dataModel";import { AnimatePresence, motion } from "framer-motion";
+import type { Id } from "@/convex/_generated/dataModel";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowUp,
+  Check,
   Globe,
   Languages,
   Loader2,
   Mic,
+  Menu,
   Newspaper,
   Plus,
   RotateCcw,
+  Settings,
   Sparkles,
   Square,
   Trash2,
+  User,
   Volume2,
   VolumeX,
   Zap,
+  Home,
+  MessageSquare,
+  X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { JarvisIcon } from "@/components/jarvis-icon";
 import { MarkdownMessage } from "@/components/markdown-message";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/hooks/use-auth";
 import { useVoicePlayer, useVoiceRecorder } from "@/hooks/use-voice";
 
 // ---------------------------------------------------------------------------
-// Source types (mirror of convex/ai.ts return shapes)
+// Source types
 // ---------------------------------------------------------------------------
 
 interface Source {
@@ -46,8 +62,7 @@ interface NewsItem {
 }
 
 // ---------------------------------------------------------------------------
-// Message rendering — citations are handled inside MarkdownMessage; user
-// messages render as plain pre-wrapped text.
+// Sub-components
 // ---------------------------------------------------------------------------
 
 function SourceList({ sources }: { sources: Source[] }) {
@@ -68,7 +83,9 @@ function SourceList({ sources }: { sources: Source[] }) {
             >
               {s.title}
               {s.domain ? (
-                <span className="ml-1 text-muted-foreground/60">— {s.domain}</span>
+                <span className="ml-1 text-muted-foreground/60">
+                  — {s.domain}
+                </span>
               ) : null}
             </a>
           </li>
@@ -77,10 +94,6 @@ function SourceList({ sources }: { sources: Source[] }) {
     </div>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Assistant panel actions
-// ---------------------------------------------------------------------------
 
 interface NlpResult {
   language?: unknown;
@@ -91,9 +104,13 @@ interface NlpResult {
 function formatNlp(result: NlpResult | null): string {
   if (!result) return "";
   const lines: string[] = [];
-  const lang = result.language as { language_name?: string; language_code?: string } | null;
+  const lang = result.language as
+    | { language_name?: string; language_code?: string }
+    | null;
   if (lang?.language_name) {
-    lines.push(`Language: ${lang.language_name}${lang.language_code ? ` (${lang.language_code})` : ""}`);
+    lines.push(
+      `Language: ${lang.language_name}${lang.language_code ? ` (${lang.language_code})` : ""}`,
+    );
   }
   const ents = result.entities as Record<string, unknown> | null;
   const list = (ents?.entities ?? ents?.results) as
@@ -102,7 +119,9 @@ function formatNlp(result: NlpResult | null): string {
   if (Array.isArray(list) && list.length > 0) {
     const uniq = list
       .slice(0, 8)
-      .map((e) => `${e.text ?? "?"}${e.label ? ` (${e.label})` : ""}`);
+      .map(
+        (e) => `${e.text ?? "?"}${e.label ? ` (${e.label})` : ""}`,
+      );
     lines.push(`Entities: ${uniq.join(", ")}`);
   }
   const sim = result.similarity as { similarity?: number } | null;
@@ -131,7 +150,9 @@ function NewsPanel({ items }: { items: NewsItem[] }) {
             </a>
             <span className="ml-1.5 text-muted-foreground">
               {n.source ? `· ${n.source}` : ""}
-              {n.publishedAt ? ` · ${new Date(n.publishedAt).toLocaleDateString()}` : ""}
+              {n.publishedAt
+                ? ` · ${new Date(n.publishedAt).toLocaleDateString()}`
+                : ""}
             </span>
           </li>
         ))}
@@ -141,7 +162,7 @@ function NewsPanel({ items }: { items: NewsItem[] }) {
 }
 
 // ---------------------------------------------------------------------------
-// Voice panel — AssemblyAI transcript with sentiment + summary
+// Voice panel
 // ---------------------------------------------------------------------------
 
 interface VoiceNoteResult {
@@ -166,9 +187,14 @@ function SentimentBar({
         {label}
       </span>
       <div className="h-1 flex-1 overflow-hidden rounded-full bg-muted">
-        <div className={`h-full rounded-full ${tone}`} style={{ width: `${value}%` }} />
+        <div
+          className={`h-full rounded-full ${tone}`}
+          style={{ width: `${value}%` }}
+        />
       </div>
-      <span className="w-8 text-right text-[10px] text-muted-foreground">{value}%</span>
+      <span className="w-8 text-right text-[10px] text-muted-foreground">
+        {value}%
+      </span>
     </div>
   );
 }
@@ -200,9 +226,21 @@ function VoicePanel({
         </p>
       ) : null}
       <div className="mt-3 space-y-1.5">
-        <SentimentBar label="Positive" value={note.sentiment.positive} tone="bg-foreground" />
-        <SentimentBar label="Neutral" value={note.sentiment.neutral} tone="bg-muted-foreground/50" />
-        <SentimentBar label="Negative" value={note.sentiment.negative} tone="bg-destructive/60" />
+        <SentimentBar
+          label="Positive"
+          value={note.sentiment.positive}
+          tone="bg-foreground"
+        />
+        <SentimentBar
+          label="Neutral"
+          value={note.sentiment.neutral}
+          tone="bg-muted-foreground/50"
+        />
+        <SentimentBar
+          label="Negative"
+          value={note.sentiment.negative}
+          tone="bg-destructive/60"
+        />
       </div>
     </div>
   );
@@ -242,6 +280,8 @@ export default function Dashboard() {
   const [panelBusy, setPanelBusy] = useState<"nlp" | "news" | null>(null);
   const [panelVoice, setPanelVoice] = useState<VoiceNoteResult | null>(null);
   const [transcribing, setTranscribing] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
   const [voiceOutput, setVoiceOutput] = useState(() => {
     try {
       return localStorage.getItem("jarvis-voice-output") === "true";
@@ -250,29 +290,33 @@ export default function Dashboard() {
     }
   });
 
-  // Persist voice-output preference
   useEffect(() => {
     try {
       localStorage.setItem("jarvis-voice-output", String(voiceOutput));
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }, [voiceOutput]);
 
-  // --- Voice output: Groq TTS per assistant message ---
+  // --- Voice output ---
   const player = useVoicePlayer();
 
-  // --- Voice input: record → transcribe (AssemblyAI) → fill composer ---
   const handleRecording = async (blob: Blob) => {
     setTranscribing(true);
     setAssistantError(null);
     setPanelVoice(null);
     try {
       const bytes = new Uint8Array(await blob.arrayBuffer());
-      const result = (await transcribeAction({ audio: bytes.buffer })) as VoiceNoteResult;
+      const result = (await transcribeAction({
+        audio: bytes.buffer,
+      })) as VoiceNoteResult;
       setPanelVoice(result);
       setInput(result.text);
       inputRef.current?.focus();
     } catch (err) {
-      setAssistantError(err instanceof Error ? err.message : "Transcription failed.");
+      setAssistantError(
+        err instanceof Error ? err.message : "Transcription failed.",
+      );
     } finally {
       setTranscribing(false);
     }
@@ -284,9 +328,11 @@ export default function Dashboard() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const lastMsg = messages?.[messages.length - 1];
 
-  // Auto-scroll
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    scrollRef.current?.scrollTo({
+      top: scrollRef.current.scrollHeight,
+      behavior: "smooth",
+    });
   }, [messages?.length, sending]);
 
   // Auto-speak new assistant replies when voice output is enabled
@@ -295,7 +341,11 @@ export default function Dashboard() {
     const count = messages?.length ?? 0;
     if (voiceOutput && count > prevMsgCount.current && !sending) {
       const newest = messages![count - 1];
-      if (newest.role === "assistant" && !player.playingId && !player.loadingId) {
+      if (
+        newest.role === "assistant" &&
+        !player.playingId &&
+        !player.loadingId
+      ) {
         void handleSpeak(newest._id, newest.content);
       }
     }
@@ -332,13 +382,23 @@ export default function Dashboard() {
         setActiveId(sid);
       } else {
         sessionId = activeId;
-        await appendMessage({ sessionId, role: "user", content: text });
-        history = (messages ?? []).map((m) => ({ role: m.role, content: m.content }));
+        await appendMessage({
+          sessionId,
+          role: "user",
+          content: text,
+        });
+        history = (messages ?? []).map((m) => ({
+          role: m.role,
+          content: m.content,
+        }));
       }
 
-      // Deep Research path
       if (deepResearch) {
-        const { answer, sources } = await runDeepResearch(sessionId, text, history);
+        const { answer, sources } = await runDeepResearch(
+          sessionId,
+          text,
+          history,
+        );
         await appendMessage({
           sessionId,
           role: "assistant",
@@ -361,7 +421,9 @@ export default function Dashboard() {
       }
     } catch (err) {
       setAssistantError(
-        err instanceof Error ? err.message : "Something went wrong. Please try again.",
+        err instanceof Error
+          ? err.message
+          : "Something went wrong. Please try again.",
       );
     } finally {
       setSending(false);
@@ -369,7 +431,6 @@ export default function Dashboard() {
     }
   };
 
-  // The Convex action calls. Wrapped so both paths share error handling.
   const runAsk = async (
     prompt: string,
     history: { role: string; content: string }[],
@@ -393,7 +454,9 @@ export default function Dashboard() {
       const result = await analyzeAction({ text: lastMsg.content });
       setPanelNlp(result as NlpResult);
     } catch (err) {
-      setAssistantError(err instanceof Error ? err.message : "NLP analysis failed.");
+      setAssistantError(
+        err instanceof Error ? err.message : "NLP analysis failed.",
+      );
     } finally {
       setPanelBusy(null);
     }
@@ -407,7 +470,9 @@ export default function Dashboard() {
       const items = await newsAction({ keywords: input.trim() });
       setPanelNews(items as NewsItem[]);
     } catch (err) {
-      setAssistantError(err instanceof Error ? err.message : "News search failed.");
+      setAssistantError(
+        err instanceof Error ? err.message : "News search failed.",
+      );
     } finally {
       setPanelBusy(null);
     }
@@ -428,7 +493,11 @@ export default function Dashboard() {
       return;
     }
     synth.cancel();
-    const utt = new SpeechSynthesisUtterance(text.replace(/```[\s\S]*?```/g, " code block ").replace(/[#*_`~\[\]]/g, ""));
+    const utt = new SpeechSynthesisUtterance(
+      text
+        .replace(/```[\s\S]*?```/g, " code block ")
+        .replace(/[#*_`~\[\]]/g, ""),
+    );
     utt.rate = 1;
     utt.pitch = 1;
     utt.onend = () => {
@@ -445,7 +514,6 @@ export default function Dashboard() {
   };
 
   const handleSpeak = async (id: string, content: string) => {
-    // If already speaking this message, stop
     if (player.playingId === id) {
       player.stop();
       window.speechSynthesis?.cancel();
@@ -456,8 +524,7 @@ export default function Dashboard() {
     try {
       const { audio } = await speakAction({ text: content });
       player.play(id, audio);
-    } catch (err) {
-      // Groq TTS failed — fall back to browser speech
+    } catch {
       player.setLoadingId(null);
       speakViaBrowser(id, content);
     }
@@ -470,16 +537,22 @@ export default function Dashboard() {
     }
   };
 
+  const sessionTitle = activeId
+    ? sessions.find((s) => s._id === activeId)?.title ?? "Chat"
+    : "New chat";
+
   return (
     <TooltipProvider>
       <div className="flex h-screen bg-background text-foreground">
-        {/* Sidebar */}
+        {/* ---- Desktop sidebar ---- */}
         <aside className="hidden w-64 shrink-0 flex-col border-r bg-sidebar md:flex">
           <div className="flex items-center justify-between px-5 py-4">
-            <span className="flex items-center gap-2">
+            <Link to="/" className="flex items-center gap-2.5">
               <JarvisIcon className="size-5" />
-              <span className="text-sm font-semibold tracking-tight">JARVIS</span>
-            </span>
+              <span className="text-sm font-semibold tracking-tight">
+                JARVIS
+              </span>
+            </Link>
             <Button
               variant="ghost"
               size="icon-sm"
@@ -492,13 +565,18 @@ export default function Dashboard() {
           <Separator />
           <div className="flex-1 overflow-y-auto p-2">
             {sessions.length === 0 ? (
-              <p className="px-3 py-2 text-xs text-muted-foreground">No chats yet</p>
+              <p className="px-3 py-2 text-xs text-muted-foreground">
+                No chats yet
+              </p>
             ) : (
               <ul className="space-y-0.5">
                 {sessions.map((s) => (
                   <li key={s._id} className="group relative">
                     <button
-                      onClick={() => setActiveId(s._id)}
+                      onClick={() => {
+                        setActiveId(s._id);
+                        setSidebarOpen(false);
+                      }}
                       className={`w-full truncate rounded-md px-3 py-2 pr-8 text-left text-sm transition-colors ${
                         activeId === s._id
                           ? "bg-accent font-medium"
@@ -536,74 +614,252 @@ export default function Dashboard() {
           </div>
         </aside>
 
-        {/* Chat column */}
+        {/* ---- Mobile sidebar overlay ---- */}
+        <AnimatePresence>
+          {sidebarOpen && (
+            <>
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="fixed inset-0 z-40 bg-black/40 md:hidden"
+                onClick={() => setSidebarOpen(false)}
+              />
+              <motion.aside
+                initial={{ x: -280 }}
+                animate={{ x: 0 }}
+                exit={{ x: -280 }}
+                transition={{ type: "spring", damping: 30, stiffness: 350 }}
+                className="fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r bg-sidebar md:hidden"
+              >
+                <div className="flex items-center justify-between px-5 py-4">
+                  <Link
+                    to="/"
+                    className="flex items-center gap-2.5"
+                  >
+                    <JarvisIcon className="size-5" />
+                    <span className="text-sm font-semibold tracking-tight">
+                      JARVIS
+                    </span>
+                  </Link>
+                  <button
+                    onClick={() => setSidebarOpen(false)}
+                    className="rounded p-1 text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="size-4" />
+                  </button>
+                </div>
+                <Separator />
+                <div className="flex-1 overflow-y-auto p-2">
+                  <Button
+                    variant="ghost"
+                    className="mb-1 w-full justify-start gap-2 text-sm"
+                    onClick={() => {
+                      setActiveId(null);
+                      setSidebarOpen(false);
+                    }}
+                  >
+                    <Plus className="size-4" /> New chat
+                  </Button>
+                  {sessions.length === 0 ? (
+                    <p className="px-3 py-2 text-xs text-muted-foreground">
+                      No chats yet
+                    </p>
+                  ) : (
+                    <ul className="space-y-0.5">
+                      {sessions.map((s) => (
+                        <li key={s._id} className="group relative">
+                          <button
+                            onClick={() => {
+                              setActiveId(s._id);
+                              setSidebarOpen(false);
+                            }}
+                            className={`w-full truncate rounded-md px-3 py-2 pr-8 text-left text-sm transition-colors ${
+                              activeId === s._id
+                                ? "bg-accent font-medium"
+                                : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+                            }`}
+                          >
+                            {s.title}
+                          </button>
+                          <button
+                            onClick={() => {
+                              void deleteSession({ sessionId: s._id });
+                              if (activeId === s._id) setActiveId(null);
+                            }}
+                            className="absolute top-1/2 right-2 -translate-y-1/2 rounded p-1 text-muted-foreground/50 opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
+                          >
+                            <Trash2 className="size-3.5" />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                <Separator />
+                <div className="flex items-center justify-between px-5 py-3 text-xs text-muted-foreground">
+                  <span className="truncate">
+                    {user?.name || user?.email || "Guest"}
+                  </span>
+                  <button
+                    onClick={handleSignOut}
+                    className="underline-offset-2 hover:text-foreground hover:underline"
+                  >
+                    Sign out
+                  </button>
+                </div>
+              </motion.aside>
+            </>
+          )}
+        </AnimatePresence>
+
+        {/* ---- Main area ---- */}
         <main className="flex min-w-0 flex-1 flex-col">
-          {/* Header */}
-          <header className="flex items-center justify-between border-b px-6 py-3.5">
-            <div className="flex items-center gap-3">
-              <span className="text-sm font-semibold tracking-tight md:hidden">JARVIS</span>
-              <span className="hidden text-sm text-muted-foreground md:inline">
-                {activeId
-                  ? sessions.find((s) => s._id === activeId)?.title
-                  : "New chat"}
-              </span>
-            </div>
+          {/* ---- Menu bar ---- */}
+          <header className="flex items-center justify-between border-b px-4 py-2 sm:px-6">
+            {/* Left: hamburger + title */}
             <div className="flex items-center gap-2">
               <button
-                onClick={() => setDeepResearch((v) => !v)}
-                className={`inline-flex h-8 items-center gap-2 rounded-md border px-3 text-xs font-medium transition-colors ${
-                  deepResearch
-                    ? "border-foreground bg-foreground text-background"
-                    : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                }`}
+                onClick={() => setSidebarOpen(true)}
+                className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground md:hidden"
+                title="Menu"
               >
-                <Globe className="size-3.5" />
-                Deep Research
-                <span
-                  className={`ml-0.5 size-1.5 rounded-full transition-colors ${
-                    deepResearch ? "bg-background" : "bg-muted-foreground/40"
-                  }`}
-                />
+                <Menu className="size-4" />
               </button>
-              <div className="hidden h-4 w-px bg-border sm:block" />
-              <button
-                onClick={() => setVoiceOutput((v) => !v)}
-                title={voiceOutput ? "Disable auto-speak" : "Enable auto-speak"}
-                className={`inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors ${
-                  voiceOutput
-                    ? "border-foreground bg-foreground text-background"
-                    : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                }`}
-              >
-                {voiceOutput ? <Volume2 className="size-3.5" /> : <VolumeX className="size-3.5" />}
-                <span className="hidden sm:inline">Voice</span>
-              </button>
-              <div className="hidden h-4 w-px bg-border sm:block" />
-              <div className="hidden items-center gap-1.5 text-xs text-muted-foreground sm:flex">
-                <Zap className="size-3" />
-                Auto-fallback on
+              <div className="hidden items-center gap-2 md:flex">
+                <JarvisIcon className="size-4 text-muted-foreground" />
+                <Separator orientation="vertical" className="h-4" />
               </div>
+              <span className="max-w-[180px] truncate text-sm text-muted-foreground sm:max-w-none">
+                {sessionTitle}
+              </span>
+            </div>
+
+            {/* Right: menu bar actions */}
+            <div className="flex items-center gap-1">
+              {/* New chat (desktop) */}
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="hidden md:inline-flex"
+                onClick={() => setActiveId(null)}
+                title="New chat"
+              >
+                <Plus className="size-4" />
+              </Button>
+
+              {/* Tools menu */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    title="Tools"
+                  >
+                    <Settings className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-52">
+                  <DropdownMenuLabel>Tools</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onClick={() => setDeepResearch((v) => !v)}
+                  >
+                    <Globe className="size-4" />
+                    Deep Research
+                    {deepResearch ? (
+                      <Check className="ml-auto size-4" />
+                    ) : null}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => setVoiceOutput((v) => !v)}
+                  >
+                    {voiceOutput ? (
+                      <Volume2 className="size-4" />
+                    ) : (
+                      <VolumeX className="size-4" />
+                    )}
+                    Voice output
+                    {voiceOutput ? (
+                      <Check className="ml-auto size-4" />
+                    ) : null}
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={handleAnalyze} disabled={!lastMsg}>
+                    <Languages className="size-4" />
+                    Analyze last message
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={handleNews}
+                    disabled={!input.trim()}
+                  >
+                    <Newspaper className="size-4" />
+                    Search news
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              {/* User menu */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button className="flex size-7 items-center justify-center rounded-full bg-accent text-xs font-medium text-muted-foreground transition-colors hover:text-foreground">
+                    {user?.name?.[0]?.toUpperCase() ||
+                      user?.email?.[0]?.toUpperCase() ||
+                      "G"}
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  <DropdownMenuLabel className="font-normal">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-sm font-medium">
+                        {user?.name || "Guest"}
+                      </span>
+                      {user?.email ? (
+                        <span className="text-xs text-muted-foreground">
+                          {user.email}
+                        </span>
+                      ) : null}
+                    </div>
+                  </DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem asChild>
+                    <Link to="/">
+                      <Home className="size-4" /> Home
+                    </Link>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleSignOut}>
+                    <User className="size-4" /> Sign out
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </header>
 
-          {/* Messages */}
+          {/* ---- Messages ---- */}
           <div ref={scrollRef} className="flex-1 overflow-y-auto">
             {!messages || messages.length === 0 ? (
               <div className="mx-auto flex h-full max-w-2xl flex-col items-center justify-center px-6">
-                <Sparkles className="size-5 text-muted-foreground/40" strokeWidth={1.5} />
-                <h1 className="mt-4 text-2xl font-semibold tracking-tight">
+                <div className="relative">
+                  <JarvisIcon className="size-10 text-muted-foreground/30" />
+                  <Sparkles
+                    className="absolute -top-1 -right-1 size-3.5 text-muted-foreground/50"
+                    strokeWidth={1.5}
+                  />
+                </div>
+                <h1 className="mt-6 text-2xl font-semibold tracking-tight">
                   How can I help?
                 </h1>
-                <p className="mt-2 text-center text-sm leading-6 text-muted-foreground">
+                <p className="mt-2 max-w-md text-center text-sm leading-6 text-muted-foreground">
                   Ask anything. Toggle Deep Research for live web answers with
                   citations — Groq answers first, Hugging Face takes over
                   automatically if it fails.
                 </p>
-                <div className="mt-8 flex flex-wrap justify-center gap-2">
+                <div className="mt-8 grid w-full max-w-md grid-cols-1 gap-2 sm:grid-cols-2">
                   {[
                     "Explain quantum computing simply",
                     "What's new in AI this week?",
                     "Summarize the history of the internet",
+                    "Compare React vs Vue in 2026",
                   ].map((s) => (
                     <button
                       key={s}
@@ -611,11 +867,25 @@ export default function Dashboard() {
                         setInput(s);
                         inputRef.current?.focus();
                       }}
-                      className="rounded-md border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                      className="rounded-lg border px-4 py-3 text-left text-xs leading-5 text-muted-foreground transition-colors hover:border-foreground/20 hover:bg-accent hover:text-foreground"
                     >
                       {s}
                     </button>
                   ))}
+                </div>
+                <div className="mt-10 flex flex-wrap items-center justify-center gap-4 text-[11px] text-muted-foreground/60">
+                  <span className="inline-flex items-center gap-1">
+                    <Globe className="size-3" /> Web search
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <Mic className="size-3" /> Voice
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <Languages className="size-3" /> NLP
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <Zap className="size-3" /> Auto-fallback
+                  </span>
                 </div>
               </div>
             ) : (
@@ -623,27 +893,45 @@ export default function Dashboard() {
                 <ul className="space-y-8">
                   {messages.map((m) => (
                     <li key={m._id}>
-                      <div className="flex items-baseline justify-between gap-4">
+                      {/* Label row */}
+                      <div className="flex items-center gap-2.5">
+                        {m.role === "assistant" ? (
+                          <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-accent">
+                            <JarvisIcon className="size-3.5" />
+                          </div>
+                        ) : (
+                          <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-accent text-[10px] font-medium text-muted-foreground">
+                            {user?.name?.[0]?.toUpperCase() ||
+                              user?.email?.[0]?.toUpperCase() ||
+                              "Y"}
+                          </div>
+                        )}
                         <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
                           {m.role === "user" ? "You" : "Jarvis"}
                         </span>
                         {m.role === "assistant" && (
-                          <span className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                          <span className="ml-auto flex items-center gap-2 text-[10px] text-muted-foreground">
                             {m.usedSearch || m.usedFallback ? (
                               <span className="flex items-center gap-1">
-                                {m.usedSearch && <Globe className="size-3" />}
-                                {m.usedFallback && <RotateCcw className="size-3" />}
+                                {m.usedSearch && (
+                                  <Globe className="size-3" />
+                                )}
+                                {m.usedFallback && (
+                                  <RotateCcw className="size-3" />
+                                )}
                                 {m.usedSearch ? "web" : "fallback"}
                                 {" · "}
                                 {m.model?.split("/")[0]}
                               </span>
                             ) : null}
                             <button
-                              onClick={() => void handleSpeak(m._id, m.content)}
+                              onClick={() =>
+                                void handleSpeak(m._id, m.content)
+                              }
                               title={
                                 player.playingId === m._id
                                   ? "Stop playback"
-                                  : "Speak with Groq TTS"
+                                  : "Speak"
                               }
                               className="rounded p-0.5 transition-colors hover:text-foreground"
                             >
@@ -658,23 +946,33 @@ export default function Dashboard() {
                           </span>
                         )}
                       </div>
+                      {/* Message body */}
                       {m.role === "user" ? (
-                        <div className="mt-2 text-sm leading-7 whitespace-pre-wrap text-foreground">
+                        <div className="mt-2 ml-8.5 text-sm leading-7 whitespace-pre-wrap text-foreground">
                           {m.content}
                         </div>
                       ) : (
-                        <div className="mt-2 text-sm text-foreground/90">
-                          <MarkdownMessage content={m.content} sources={m.sources} />
+                        <div className="mt-2 ml-8.5 text-sm text-foreground/90">
+                          <MarkdownMessage
+                            content={m.content}
+                            sources={m.sources}
+                          />
                         </div>
                       )}
-                      {m.role === "assistant" && m.sources && m.sources.length > 0 ? (
-                        <SourceList sources={m.sources} />
+                      {m.role === "assistant" &&
+                      m.sources &&
+                      m.sources.length > 0 ? (
+                        <div className="ml-8.5">
+                          <SourceList sources={m.sources} />
+                        </div>
                       ) : null}
                     </li>
                   ))}
                   {sending && (
-                    <li className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Loader2 className="size-3.5 animate-spin" />
+                    <li className="flex items-center gap-2.5 text-sm text-muted-foreground">
+                      <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-accent">
+                        <Loader2 className="size-3.5 animate-spin" />
+                      </div>
                       {deepResearch
                         ? "Searching the web, then thinking…"
                         : "Thinking…"}
@@ -685,7 +983,7 @@ export default function Dashboard() {
             )}
           </div>
 
-          {/* Assistant panel — NLP / news / errors */}
+          {/* ---- Panel (NLP / news / voice / errors) ---- */}
           <AnimatePresence>
             {(panelNlp || panelNews || panelVoice || assistantError) && (
               <motion.div
@@ -703,11 +1001,13 @@ export default function Dashboard() {
                     </p>
                   )}
                   {panelNlp && (
-                    <pre className="text-xs leading-5 whitespace-pre-wrap text-muted-foreground">
+                    <pre className="whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
                       {formatNlp(panelNlp)}
                     </pre>
                   )}
-                  {panelNews && panelNews.length > 0 && <NewsPanel items={panelNews} />}
+                  {panelNews && panelNews.length > 0 && (
+                    <NewsPanel items={panelNews} />
+                  )}
                   {panelVoice && (
                     <VoicePanel
                       note={panelVoice}
@@ -722,10 +1022,10 @@ export default function Dashboard() {
             )}
           </AnimatePresence>
 
-          {/* Composer */}
-          <div className="border-t px-6 py-4">
+          {/* ---- Composer ---- */}
+          <div className="border-t px-4 py-3 sm:px-6 sm:py-4">
             <div className="mx-auto max-w-2xl">
-              <div className="relative rounded-lg border bg-card transition-colors focus-within:border-foreground/30">
+              <div className="relative rounded-xl border bg-card transition-colors focus-within:border-foreground/30 focus-within:shadow-sm">
                 <textarea
                   ref={inputRef}
                   value={input}
@@ -739,56 +1039,61 @@ export default function Dashboard() {
                         : "Message Jarvis…"
                   }
                   rows={1}
-                  className="max-h-40 w-full resize-none bg-transparent px-4 py-3 pr-20 text-sm outline-none placeholder:text-muted-foreground/70"
+                  className="max-h-40 w-full resize-none bg-transparent px-4 py-3 pr-24 text-sm outline-none placeholder:text-muted-foreground/70"
                 />
-                <button
-                  onClick={() =>
-                    recorder.recording
-                      ? recorder.stop()
-                      : void recorder.start()
-                  }
-                  disabled={sending || transcribing}
-                  title={
-                    recorder.recording
-                      ? "Stop recording"
-                      : "Record a voice note (AssemblyAI)"
-                  }
-                  className={`absolute right-11 bottom-2.5 inline-flex size-7 items-center justify-center rounded-md transition-colors ${
-                    recorder.recording
-                      ? "bg-destructive text-white"
-                      : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                  } disabled:opacity-40`}
-                >
-                  {transcribing ? (
-                    <Loader2 className="size-3.5 animate-spin" />
-                  ) : recorder.recording ? (
-                    <Square className="size-3" />
-                  ) : (
-                    <Mic className="size-3.5" />
-                  )}
-                </button>
-                <Button
-                  size="icon-sm"
-                  onClick={() => void runSend()}
-                  disabled={!input.trim() || sending}
-                  className="absolute right-2.5 bottom-2.5"
-                >
-                  {sending ? (
-                    <Loader2 className="size-3.5 animate-spin" />
-                  ) : (
-                    <ArrowUp className="size-3.5" />
-                  )}
-                </Button>
+                <div className="absolute right-2 bottom-2 flex items-center gap-1">
+                  <button
+                    onClick={() =>
+                      recorder.recording
+                        ? recorder.stop()
+                        : void recorder.start()
+                    }
+                    disabled={sending || transcribing}
+                    title={
+                      recorder.recording
+                        ? "Stop recording"
+                        : "Record voice note"
+                    }
+                    className={`inline-flex size-7 items-center justify-center rounded-lg transition-colors ${
+                      recorder.recording
+                        ? "bg-destructive text-white"
+                        : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                    } disabled:opacity-40`}
+                  >
+                    {transcribing ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : recorder.recording ? (
+                      <Square className="size-3" />
+                    ) : (
+                      <Mic className="size-3.5" />
+                    )}
+                  </button>
+                  <Button
+                    size="icon-sm"
+                    onClick={() => void runSend()}
+                    disabled={!input.trim() || sending}
+                    className="size-7 rounded-lg"
+                  >
+                    {sending ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <ArrowUp className="size-3.5" />
+                    )}
+                  </Button>
+                </div>
               </div>
               <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
                 {recorder.recording ? (
                   <span className="flex items-center gap-1.5 text-destructive">
                     <span className="size-1.5 animate-pulse rounded-full bg-destructive" />
-                    Recording {Math.floor(recorder.seconds / 60)}:
+                    Recording{" "}
+                    {Math.floor(recorder.seconds / 60)}:
                     {String(recorder.seconds % 60).padStart(2, "0")}
                   </span>
                 ) : (
-                  <span>Enter to send · Shift+Enter for newline</span>
+                  <span className="hidden sm:inline">
+                    Enter to send · Shift+Enter for newline
+                  </span>
                 )}
                 <div className="flex items-center gap-3">
                   <button
