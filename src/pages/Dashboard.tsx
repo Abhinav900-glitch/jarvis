@@ -242,6 +242,20 @@ export default function Dashboard() {
   const [panelBusy, setPanelBusy] = useState<"nlp" | "news" | null>(null);
   const [panelVoice, setPanelVoice] = useState<VoiceNoteResult | null>(null);
   const [transcribing, setTranscribing] = useState(false);
+  const [voiceOutput, setVoiceOutput] = useState(() => {
+    try {
+      return localStorage.getItem("jarvis-voice-output") === "true";
+    } catch {
+      return false;
+    }
+  });
+
+  // Persist voice-output preference
+  useEffect(() => {
+    try {
+      localStorage.setItem("jarvis-voice-output", String(voiceOutput));
+    } catch { /* ignore */ }
+  }, [voiceOutput]);
 
   // --- Voice output: Groq TTS per assistant message ---
   const player = useVoicePlayer();
@@ -270,9 +284,23 @@ export default function Dashboard() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const lastMsg = messages?.[messages.length - 1];
 
+  // Auto-scroll
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages?.length, sending]);
+
+  // Auto-speak new assistant replies when voice output is enabled
+  const prevMsgCount = useRef(messages?.length ?? 0);
+  useEffect(() => {
+    const count = messages?.length ?? 0;
+    if (voiceOutput && count > prevMsgCount.current && !sending) {
+      const newest = messages![count - 1];
+      if (newest.role === "assistant" && !player.playingId && !player.loadingId) {
+        void handleSpeak(newest._id, newest.content);
+      }
+    }
+    prevMsgCount.current = count;
+  }, [messages?.length, sending, voiceOutput]);
 
   useEffect(() => {
     setAssistantError(null);
@@ -508,6 +536,19 @@ export default function Dashboard() {
                     deepResearch ? "bg-background" : "bg-muted-foreground/40"
                   }`}
                 />
+              </button>
+              <div className="hidden h-4 w-px bg-border sm:block" />
+              <button
+                onClick={() => setVoiceOutput((v) => !v)}
+                title={voiceOutput ? "Disable auto-speak" : "Enable auto-speak"}
+                className={`inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors ${
+                  voiceOutput
+                    ? "border-foreground bg-foreground text-background"
+                    : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                }`}
+              >
+                {voiceOutput ? <Volume2 className="size-3.5" /> : <VolumeX className="size-3.5" />}
+                <span className="hidden sm:inline">Voice</span>
               </button>
               <div className="hidden h-4 w-px bg-border sm:block" />
               <div className="hidden items-center gap-1.5 text-xs text-muted-foreground sm:flex">
