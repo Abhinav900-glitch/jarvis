@@ -66,6 +66,8 @@ const schema = defineSchema(
           }),
         ),
       ),
+      imageUrl: v.optional(v.string()),
+      imagePublicId: v.optional(v.string()),
       createdAt: v.number(),
     }).index("by_session", ["sessionId"]),
 

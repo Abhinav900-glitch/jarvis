@@ -6,11 +6,13 @@ import {
   ArrowUp,
   Check,
   Globe,
+  Image,
   Languages,
   Loader2,
   Mic,
   Menu,
   Newspaper,
+  Paperclip,
   Plus,
   RotateCcw,
   Settings,
@@ -20,10 +22,9 @@ import {
   User,
   Volume2,
   VolumeX,
+  X,
   Zap,
   Home,
-  MessageSquare,
-  X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
@@ -270,6 +271,7 @@ export default function Dashboard() {
   const newsAction = useAction(api.ai.searchNews);
   const transcribeAction = useAction(api.voice.transcribe);
   const speakAction = useAction(api.voice.speak);
+  const getSignedUploadUrl = useAction(api.cloudinary.getSignedUploadUrl);
 
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -281,6 +283,12 @@ export default function Dashboard() {
   const [panelVoice, setPanelVoice] = useState<VoiceNoteResult | null>(null);
   const [transcribing, setTranscribing] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [pendingImage, setPendingImage] = useState<{
+    url: string;
+    publicId: string;
+  } | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [voiceOutput, setVoiceOutput] = useState(() => {
     try {
@@ -357,12 +365,64 @@ export default function Dashboard() {
     setPanelNlp(null);
     setPanelNews(null);
     setPanelVoice(null);
+    setPendingImage(null);
     player.stop();
   }, [activeId]);
 
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+
+    setUploading(true);
+    setAssistantError(null);
+    try {
+      // Get signed URL from Convex
+      const signed = await getSignedUploadUrl({
+        filename: file.name,
+      });
+
+      // Upload directly to Cloudinary
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("api_key", signed.apiKey);
+      formData.append("timestamp", String(signed.timestamp));
+      formData.append("signature", signed.signature);
+      formData.append("folder", signed.folder);
+      formData.append("public_id", signed.publicId);
+      formData.append("upload_preset", "jarvis_unsigned");
+
+      const res = await fetch(signed.url, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const err = await res.text();
+        throw new Error(`Upload failed: ${err.slice(0, 200)}`);
+      }
+
+      const data = (await res.json()) as {
+        secure_url: string;
+        public_id: string;
+      };
+
+      setPendingImage({
+        url: data.secure_url,
+        publicId: data.public_id,
+      });
+    } catch (err) {
+      setAssistantError(
+        err instanceof Error ? err.message : "Image upload failed.",
+      );
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const runSend = async () => {
     const text = input.trim();
-    if (!text || sending) return;
+    if ((!text && !pendingImage) || sending) return;
 
     setSending(true);
     setAssistantError(null);
@@ -370,14 +430,24 @@ export default function Dashboard() {
     setPanelNews(null);
     setPanelVoice(null);
     if (recorder.recording) recorder.stop();
+
+    const imagePayload = pendingImage
+      ? { imageUrl: pendingImage.url, imagePublicId: pendingImage.publicId }
+      : undefined;
+    setPendingImage(null);
     setInput("");
+
+    const messageContent = text || (imagePayload ? "[Image]" : "");
 
     try {
       let sessionId: Id<"chatSessions">;
       let history: { role: string; content: string }[] = [];
 
       if (!activeId) {
-        const { sessionId: sid } = await startWithMessage({ content: text });
+        const { sessionId: sid } = await startWithMessage({
+          content: messageContent,
+          ...imagePayload,
+        });
         sessionId = sid;
         setActiveId(sid);
       } else {
@@ -385,7 +455,8 @@ export default function Dashboard() {
         await appendMessage({
           sessionId,
           role: "user",
-          content: text,
+          content: messageContent,
+          ...imagePayload,
         });
         history = (messages ?? []).map((m) => ({
           role: m.role,
@@ -948,8 +1019,19 @@ export default function Dashboard() {
                       </div>
                       {/* Message body */}
                       {m.role === "user" ? (
-                        <div className="mt-2 ml-8.5 text-sm leading-7 whitespace-pre-wrap text-foreground">
-                          {m.content}
+                        <div className="mt-2 ml-8.5">
+                          {m.imageUrl ? (
+                            <img
+                              src={m.imageUrl}
+                              alt="Uploaded image"
+                              className="mb-2 max-h-64 w-auto rounded-lg border object-contain"
+                            />
+                          ) : null}
+                          {m.content && m.content !== "[Image]" ? (
+                            <div className="text-sm leading-7 whitespace-pre-wrap text-foreground">
+                              {m.content}
+                            </div>
+                          ) : null}
                         </div>
                       ) : (
                         <div className="mt-2 ml-8.5 text-sm text-foreground/90">
@@ -1025,22 +1107,59 @@ export default function Dashboard() {
           {/* ---- Composer ---- */}
           <div className="border-t px-4 py-3 sm:px-6 sm:py-4">
             <div className="mx-auto max-w-2xl">
-              <div className="relative rounded-xl border bg-card transition-colors focus-within:border-foreground/30 focus-within:shadow-sm">
-                <textarea
-                  ref={inputRef}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder={
-                    recorder.recording
-                      ? "Listening… click the stop square when done."
-                      : deepResearch
-                        ? "Research anything on the live web…"
-                        : "Message Jarvis…"
-                  }
-                  rows={1}
-                  className="max-h-40 w-full resize-none bg-transparent px-4 py-3 pr-24 text-sm outline-none placeholder:text-muted-foreground/70"
+              <div className="rounded-xl border bg-card transition-colors focus-within:border-foreground/30 focus-within:shadow-sm">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleImageUpload}
                 />
+                {pendingImage ? (
+                  <div className="px-4 pt-3">
+                    <div className="relative inline-block">
+                      <img
+                        src={pendingImage.url}
+                        alt="Upload preview"
+                        className="max-h-32 w-auto rounded-lg border object-contain"
+                      />
+                      <button
+                        onClick={() => setPendingImage(null)}
+                        className="absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full bg-foreground text-background"
+                      >
+                        <X className="size-3" />
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+                <div className="relative flex items-end">
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={sending || uploading}
+                    title="Upload image"
+                    className="absolute left-2 bottom-2.5 inline-flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
+                  >
+                    {uploading ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <Paperclip className="size-3.5" />
+                    )}
+                  </button>
+                  <textarea
+                    ref={inputRef}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder={
+                      recorder.recording
+                        ? "Listening… click the stop square when done."
+                        : deepResearch
+                          ? "Research anything on the live web…"
+                          : "Message Jarvis…"
+                    }
+                    rows={1}
+                    className="max-h-40 w-full resize-none bg-transparent pl-10 pr-24 py-3 text-sm outline-none placeholder:text-muted-foreground/70"
+                  />
                 <div className="absolute right-2 bottom-2 flex items-center gap-1">
                   <button
                     onClick={() =>
@@ -1071,7 +1190,7 @@ export default function Dashboard() {
                   <Button
                     size="icon-sm"
                     onClick={() => void runSend()}
-                    disabled={!input.trim() || sending}
+                    disabled={(!input.trim() && !pendingImage) || sending}
                     className="size-7 rounded-lg"
                   >
                     {sending ? (
@@ -1081,6 +1200,7 @@ export default function Dashboard() {
                     )}
                   </Button>
                 </div>
+              </div>
               </div>
               <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
                 {recorder.recording ? (

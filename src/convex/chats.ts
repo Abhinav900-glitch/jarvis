@@ -111,6 +111,8 @@ export const appendMessage = mutation({
         v.object({ title: v.string(), url: v.string(), domain: v.optional(v.string()) }),
       ),
     ),
+    imageUrl: v.optional(v.string()),
+    imagePublicId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -130,6 +132,8 @@ export const appendMessage = mutation({
       usedFallback: args.usedFallback,
       usedSearch: args.usedSearch,
       sources: args.sources,
+      imageUrl: args.imageUrl,
+      imagePublicId: args.imagePublicId,
       createdAt: Date.now(),
     });
 
@@ -140,7 +144,11 @@ export const appendMessage = mutation({
 
 // Convenience: create session + first user message in one mutation.
 export const startWithMessage = mutation({
-  args: { content: v.string() },
+  args: {
+    content: v.string(),
+    imageUrl: v.optional(v.string()),
+    imagePublicId: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (userId === null) throw new Error("Sign in to start a chat.");
@@ -163,6 +171,8 @@ export const startWithMessage = mutation({
       userId,
       role: "user",
       content: args.content,
+      imageUrl: args.imageUrl,
+      imagePublicId: args.imagePublicId,
       createdAt: now,
     });
 
