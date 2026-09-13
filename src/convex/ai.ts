@@ -544,3 +544,233 @@ function extractReadableText(html: string): string {
     .replace(/\s+/g, " ")
     .trim();
 }
+
+// ---------------------------------------------------------------------------
+// Region features — timezone, currency, weather, country info
+// ---------------------------------------------------------------------------
+
+export const getWorldTime = action({
+  args: {
+    timezone: v.optional(v.string()),
+  },
+  handler: async (_ctx, args): Promise<{
+    timezone: string;
+    datetime: string;
+    date: string;
+    time: string;
+    dayOfWeek: string;
+    offset: string;
+  }> => {
+    const tz = args.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+
+    // Try worldtimeapi.org first
+    try {
+      const res = await fetch(`https://worldtimeapi.org/api/timezone/${encodeURIComponent(tz)}`);
+      if (res.ok) {
+        const data = await res.json() as {
+          timezone: string;
+          datetime: string;
+          utc_offset: string;
+          day_of_week: number;
+        };
+        const date = new Date(data.datetime);
+        const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+        return {
+          timezone: data.timezone,
+          datetime: data.datetime,
+          date: date.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", timeZone: tz }),
+          time: date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: tz }),
+          dayOfWeek: dayNames[data.day_of_week],
+          offset: data.utc_offset,
+        };
+      }
+    } catch { /* fall through */ }
+
+    // Fallback: compute locally
+    const now = new Date();
+    return {
+      timezone: tz,
+      datetime: now.toISOString(),
+      date: now.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", timeZone: tz }),
+      time: now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: tz }),
+      dayOfWeek: now.toLocaleDateString("en-US", { weekday: "long", timeZone: tz }),
+      offset: "unknown",
+    };
+  },
+});
+
+export const getCurrencyRate = action({
+  args: {
+    from: v.string(),
+    to: v.string(),
+    amount: v.optional(v.number()),
+  },
+  handler: async (_ctx, args): Promise<{
+    from: string;
+    to: string;
+    amount: number;
+    result: number;
+    rate: number;
+  }> => {
+    const from = args.from.toUpperCase().trim();
+    const to = args.to.toUpperCase().trim();
+    const amount = args.amount ?? 1;
+
+    if (from === to) {
+      return { from, to, amount, result: amount, rate: 1 };
+    }
+
+    // Use open.er-api.com (free, no key)
+    const res = await fetch(`https://open.er-api.com/v6/latest/${encodeURIComponent(from)}`);
+    if (!res.ok) throw new Error(`Currency API failed (${res.status})`);
+    const data = (await res.json()) as {
+      result?: string;
+      rates?: Record<string, number>;
+    };
+
+    if (data.result !== "success" || !data.rates) {
+      throw new Error(`Unknown currency: ${from}`);
+    }
+
+    const rate = data.rates[to];
+    if (!rate) throw new Error(`Unknown target currency: ${to}`);
+
+    return {
+      from,
+      to,
+      amount,
+      result: Math.round(amount * rate * 100) / 100,
+      rate: Math.round(rate * 10000) / 10000,
+    };
+  },
+});
+
+export const getWeather = action({
+  args: {
+    city: v.string(),
+  },
+  handler: async (_ctx, args): Promise<{
+    city: string;
+    country: string;
+    temp: number;
+    feelsLike: number;
+    humidity: number;
+    wind: number;
+    description: string;
+    icon: string;
+  }> => {
+    const city = args.city.trim();
+    if (!city) throw new Error("City name is required.");
+
+    // Use wttr.in (free, no key)
+    const res = await fetch(
+      `https://wttr.in/${encodeURIComponent(city)}?format=j1`,
+      { headers: { Accept: "application/json" } },
+    );
+    if (!res.ok) throw new Error(`Weather API failed (${res.status}). Check the city name.`);
+
+    const data = (await res.json()) as {
+      current_condition?: {
+        temp_C?: string;
+       FeelsLikeC?: string;
+        humidity?: string;
+        windspeedKmph?: string;
+        weatherDesc?: { value?: string }[];
+        weatherCode?: string;
+      }[];
+      nearest_area?: {
+        areaName?: { value?: string }[];
+        country?: { value?: string }[];
+      }[];
+    };
+
+    const current = data.current_condition?.[0];
+    const area = data.nearest_area?.[0];
+    if (!current) throw new Error("Could not retrieve weather data.");
+
+    const code = current.weatherCode ?? "113";
+    const iconMap: Record<string, string> = {
+      "113": "☀️", "116": "⛅", "119": "☁️", "122": "☁️",
+      "143": "🌫️", "176": "🌦️", "179": "🌨️", "182": "🌨️",
+      "185": "🌨️", "200": "⛈️", "227": "❄️", "230": "❄️",
+      "248": "🌫️", "260": "🌫️", "263": "🌦️", "266": "🌧️",
+      "281": "🌨️", "284": "🌨️", "293": "🌦️", "296": "🌧️",
+      "299": "🌧️", "302": "🌧️", "305": "🌧️", "308": "🌧️",
+      "311": "🌨️", "314": "🌨️", "317": "🌨️", "320": "🌨️",
+      "323": "🌨️", "326": "🌨️", "329": "❄️", "332": "❄️",
+      "335": "❄️", "338": "❄️", "350": "🌨️", "353": "🌦️",
+      "356": "🌧️", "359": "🌧️", "362": "🌨️", "365": "🌨️",
+      "368": "❄️", "371": "❄️", "374": "🌨️", "377": "🌨️",
+      "386": "⛈️", "389": "⛈️", "392": "⛈️", "395": "❄️",
+    };
+
+    return {
+      city: area?.areaName?.[0]?.value ?? city,
+      country: area?.country?.[0]?.value ?? "",
+      temp: parseInt(current.temp_C ?? "0"),
+      feelsLike: parseInt(current.FeelsLikeC ?? "0"),
+      humidity: parseInt(current.humidity ?? "0"),
+      wind: parseInt(current.windspeedKmph ?? "0"),
+      description: current.weatherDesc?.[0]?.value ?? "Unknown",
+      icon: iconMap[code] ?? "🌤️",
+    };
+  },
+});
+
+export const getCountryInfo = action({
+  args: {
+    query: v.string(),
+  },
+  handler: async (_ctx, args): Promise<{
+    name: string;
+    officialName: string;
+    capital: string;
+    region: string;
+    subregion: string;
+    population: number;
+    area: number;
+    languages: string[];
+    currencies: string[];
+    timezones: string[];
+    flag: string;
+    maps: string;
+  }> => {
+    const query = args.query.trim();
+    if (!query) throw new Error("Country name is required.");
+
+    const res = await fetch(`https://restcountries.com/v3.1/name/${encodeURIComponent(query)}?fullText=false`);
+    if (!res.ok) throw new Error(`Country not found: ${query}`);
+
+    const data = (await res.json()) as {
+      name?: { common?: string; official?: string };
+      capital?: string[];
+      region?: string;
+      subregion?: string;
+      population?: number;
+      area?: number;
+      languages?: Record<string, string>;
+      currencies?: Record<string, { name?: string; symbol?: string }>;
+      timezones?: string[];
+      flags?: { emoji?: string };
+      maps?: { googleMaps?: string };
+    }[];
+
+    const c = data[0];
+    if (!c) throw new Error(`Country not found: ${query}`);
+
+    return {
+      name: c.name?.common ?? query,
+      officialName: c.name?.official ?? query,
+      capital: c.capital?.[0] ?? "N/A",
+      region: c.region ?? "",
+      subregion: c.subregion ?? "",
+      population: c.population ?? 0,
+      area: c.area ?? 0,
+      languages: Object.values(c.languages ?? {}),
+      currencies: Object.values(c.currencies ?? {}).map((cur) => `${cur.name ?? ""} (${cur.symbol ?? ""})`),
+      timezones: c.timezones ?? [],
+      flag: c.flags?.emoji ?? "",
+      maps: c.maps?.googleMaps ?? "",
+    };
+  },
+});

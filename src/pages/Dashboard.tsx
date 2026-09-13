@@ -281,6 +281,10 @@ export default function Dashboard() {
   const getSignedUploadUrl = useAction(api.cloudinary.getSignedUploadUrl);
   const generateImageAction = useAction(api.cloudinary.generateImage);
   const summarizeUrlAction = useAction(api.ai.summarizeUrl);
+  const getWorldTimeAction = useAction(api.ai.getWorldTime);
+  const getCurrencyRateAction = useAction(api.ai.getCurrencyRate);
+  const getWeatherAction = useAction(api.ai.getWeather);
+  const getCountryInfoAction = useAction(api.ai.getCountryInfo);
 
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -307,6 +311,16 @@ export default function Dashboard() {
   const [showSearch, setShowSearch] = useState(false);
   const [summarizingUrl, setSummarizingUrl] = useState(false);
   const [summarizeInput, setSummarizeInput] = useState("");
+  const [regionTime, setRegionTime] = useState<string | null>(null);
+  const [regionTimezone, setRegionTimezone] = useState(() => {
+    try {
+      return localStorage.getItem("jarvis-timezone") || Intl.DateTimeFormat().resolvedOptions().timeZone;
+    } catch {
+      return "UTC";
+    }
+  });
+  const [regionResult, setRegionResult] = useState<Record<string, unknown> | null>(null);
+  const [regionBusy, setRegionBusy] = useState(false);
 
   const editMessage = useMutation(api.chats.editMessage);
   const searchSessionsQuery = useQuery(
@@ -533,8 +547,37 @@ export default function Dashboard() {
     setPendingImages([]);
     setPendingFile(null);
     setEditingId(null);
+    setRegionResult(null);
     player.stop();
   }, [activeId]);
+
+  // Refresh displayed time every second
+  useEffect(() => {
+    const tick = () => {
+      try {
+        setRegionTime(
+          new Date().toLocaleTimeString("en-US", {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            timeZone: regionTimezone,
+          }),
+        );
+      } catch {
+        setRegionTime(new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }));
+      }
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [regionTimezone]);
+
+  // Persist timezone
+  useEffect(() => {
+    try {
+      localStorage.setItem("jarvis-timezone", regionTimezone);
+    } catch { /* ignore */ }
+  }, [regionTimezone]);
 
   // Edit a user message: load into input, delete all later messages
   const handleEditMessage = async (msgId: Id<"chatMessages">, content: string) => {
@@ -835,9 +878,59 @@ export default function Dashboard() {
     }
   };
 
+  // --- Region command handlers ---
+  const handleRegionCommand = async (cmd: string, arg: string) => {
+    setRegionBusy(true);
+    setRegionResult(null);
+    setAssistantError(null);
+    try {
+      switch (cmd) {
+        case "time": {
+          const result = await getWorldTimeAction({ timezone: arg || undefined });
+          setRegionResult({ type: "time", ...result });
+          break;
+        }
+        case "weather": {
+          if (!arg) throw new Error("Usage: /weather <city>");
+          const result = await getWeatherAction({ city: arg });
+          setRegionResult({ type: "weather", ...result });
+          break;
+        }
+        case "currency": {
+          // Parse: /currency 100 USD to EUR
+          const match = arg.match(/(\d+\.?\d*)\s+(\w{3})\s+to\s+(\w{3})/i);
+          if (!match) throw new Error("Usage: /currency <amount> <FROM> to <TO>\nExample: /currency 100 USD to EUR");
+          const [, amount, from, to] = match;
+          const result = await getCurrencyRateAction({ from, to, amount: parseFloat(amount) });
+          setRegionResult({ type: "currency", ...result });
+          break;
+        }
+        case "country": {
+          if (!arg) throw new Error("Usage: /country <name>");
+          const result = await getCountryInfoAction({ query: arg });
+          setRegionResult({ type: "country", ...result });
+          break;
+        }
+      }
+    } catch (err) {
+      setAssistantError(err instanceof Error ? err.message : "Command failed.");
+    } finally {
+      setRegionBusy(false);
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      const text = input.trim();
+      // Check for slash commands
+      const slashMatch = text.match(/^\/(time|weather|currency|country)\s*(.*)/i);
+      if (slashMatch) {
+        const [, cmd, arg] = slashMatch;
+        setInput("");
+        void handleRegionCommand(cmd.toLowerCase(), arg.trim());
+        return;
+      }
       void runSend();
     }
   };
@@ -1108,6 +1201,19 @@ export default function Dashboard() {
                     Export chat
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => void handleRegionCommand("time", regionTimezone)}>
+                    🕐 Current time
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => { setInput("/weather "); inputRef.current?.focus(); }}>
+                    🌤 Weather lookup
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => { setInput("/currency 100 "); inputRef.current?.focus(); }}>
+                    💱 Currency convert
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => { setInput("/country "); inputRef.current?.focus(); }}>
+                    🌍 Country info
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={handleAnalyze} disabled={!lastMsg}>
                     <Languages className="size-4" />
                     Analyze last message
@@ -1158,6 +1264,36 @@ export default function Dashboard() {
             </div>
           </header>
 
+          {/* ---- Region bar ---- */}
+          <div className="flex items-center justify-between border-b bg-muted/30 px-4 py-1.5 text-[11px] text-muted-foreground sm:px-6">
+            <div className="flex items-center gap-3">
+              <span className="inline-flex items-center gap-1">
+                🌐
+                <select
+                  value={regionTimezone}
+                  onChange={(e) => setRegionTimezone(e.target.value)}
+                  className="cursor-pointer appearance-none bg-transparent font-medium text-foreground outline-none"
+                  title="Select timezone"
+                >
+                  {["UTC", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "Europe/London", "Europe/Paris", "Europe/Berlin", "Asia/Tokyo", "Asia/Shanghai", "Asia/Kolkata", "Asia/Dubai", "Asia/Singapore", "Australia/Sydney", "Pacific/Auckland"].map((tz) => (
+                    <option key={tz} value={tz}>{tz.replace(/_/g, " ")}</option>
+                  ))}
+                </select>
+              </span>
+              {regionTime && (
+                <span className="tabular-nums font-mono text-foreground">{regionTime}</span>
+              )}
+            </div>
+            <div className="hidden items-center gap-3 sm:flex">
+              <span className="cursor-default" title="/time, /weather, /currency, /country">
+                Commands: <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">/time</code>{" "}
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">/weather</code>{" "}
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">/currency</code>{" "}
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">/country</code>
+              </span>
+            </div>
+          </div>
+
           {/* ---- Messages ---- */}
           <div ref={scrollRef} className="flex-1 overflow-y-auto">
             {!messages || messages.length === 0 ? (
@@ -1196,6 +1332,26 @@ export default function Dashboard() {
                     </button>
                   ))}
                 </div>
+                {/* Region quick actions */}
+                <div className="mt-6 grid w-full max-w-md grid-cols-2 gap-2 sm:grid-cols-4">
+                  {[
+                    { label: "🕐 Time", cmd: "/time Asia/Tokyo" },
+                    { label: "🌤 Weather", cmd: "/weather London" },
+                    { label: "💱 Currency", cmd: "/currency 100 USD to EUR" },
+                    { label: "🌍 Country", cmd: "/country Japan" },
+                  ].map((item) => (
+                    <button
+                      key={item.cmd}
+                      onClick={() => {
+                        setInput(item.cmd);
+                        inputRef.current?.focus();
+                      }}
+                      className="rounded-lg border px-3 py-2.5 text-center text-xs font-medium text-muted-foreground transition-colors hover:border-foreground/20 hover:bg-accent hover:text-foreground"
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
                 <div className="mt-10 flex flex-wrap items-center justify-center gap-4 text-[11px] text-muted-foreground/60">
                   <span className="inline-flex items-center gap-1">
                     <Globe className="size-3" /> Web search
@@ -1205,6 +1361,9 @@ export default function Dashboard() {
                   </span>
                   <span className="inline-flex items-center gap-1">
                     <Languages className="size-3" /> NLP
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    🌐 Region
                   </span>
                   <span className="inline-flex items-center gap-1">
                     <Zap className="size-3" /> Auto-fallback
@@ -1446,6 +1605,100 @@ export default function Dashboard() {
                       )}
                     </div>
                   )}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* ---- Region result panel ---- */}
+          <AnimatePresence>
+            {(regionResult || regionBusy) && (
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 8 }}
+                transition={{ duration: 0.2 }}
+                className="border-t px-6 py-3"
+              >
+                <div className="mx-auto max-w-2xl">
+                  {regionBusy && (
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <Loader2 className="size-3 animate-spin" /> Loading region data…
+                    </div>
+                  )}
+                  {regionResult && !regionBusy && (() => {
+                    const r = regionResult as Record<string, unknown>;
+                    if (r.type === "time") {
+                      return (
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">World Time</span>
+                            <button onClick={() => setRegionResult(null)} className="rounded p-0.5 text-muted-foreground hover:text-foreground"><X className="size-3" /></button>
+                          </div>
+                          <p className="text-2xl font-mono font-semibold tabular-nums">{String(r.time)}</p>
+                          <p className="text-xs text-muted-foreground">{String(r.dayOfWeek)}, {String(r.date)} · {String(r.timezone)} ({String(r.offset)})</p>
+                        </div>
+                      );
+                    }
+                    if (r.type === "weather") {
+                      return (
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">Weather</span>
+                            <button onClick={() => setRegionResult(null)} className="rounded p-0.5 text-muted-foreground hover:text-foreground"><X className="size-3" /></button>
+                          </div>
+                          <div className="flex items-baseline gap-3">
+                            <span className="text-2xl">{String(r.icon)}</span>
+                            <span className="text-2xl font-semibold">{String(r.temp)}°C</span>
+                            <span className="text-xs text-muted-foreground">feels like {String(r.feelsLike)}°C</span>
+                          </div>
+                          <p className="text-xs text-muted-foreground">{String(r.description)} · {String(r.city)}, {String(r.country)} · 💧 {String(r.humidity)}% · 💨 {String(r.wind)} km/h</p>
+                        </div>
+                      );
+                    }
+                    if (r.type === "currency") {
+                      return (
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">Currency</span>
+                            <button onClick={() => setRegionResult(null)} className="rounded p-0.5 text-muted-foreground hover:text-foreground"><X className="size-3" /></button>
+                          </div>
+                          <p className="text-2xl font-semibold tabular-nums">{String(r.amount)} {String(r.from)} = <span className="text-primary">{String(r.result)} {String(r.to)}</span></p>
+                          <p className="text-xs text-muted-foreground">1 {String(r.from)} = {String(r.rate)} {String(r.to)}</p>
+                        </div>
+                      );
+                    }
+                    if (r.type === "country") {
+                      return (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">Country</span>
+                            <button onClick={() => setRegionResult(null)} className="rounded p-0.5 text-muted-foreground hover:text-foreground"><X className="size-3" /></button>
+                          </div>
+                          <div className="flex items-baseline gap-2">
+                            <span className="text-xl">{String(r.flag)}</span>
+                            <span className="text-lg font-semibold">{String(r.name)}</span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
+                            <div><span className="text-muted-foreground">Official:</span> {String(r.officialName)}</div>
+                            <div><span className="text-muted-foreground">Capital:</span> {String(r.capital)}</div>
+                            <div><span className="text-muted-foreground">Region:</span> {String(r.region)}{r.subregion ? ` / ${String(r.subregion)}` : ""}</div>
+                            <div><span className="text-muted-foreground">Population:</span> {typeof r.population === "number" ? r.population.toLocaleString() : String(r.population)}</div>
+                            <div><span className="text-muted-foreground">Area:</span> {typeof r.area === "number" ? r.area.toLocaleString() : String(r.area)} km²</div>
+                            <div><span className="text-muted-foreground">Languages:</span> {Array.isArray(r.languages) ? r.languages.join(", ") : String(r.languages)}</div>
+                            <div><span className="text-muted-foreground">Currencies:</span> {Array.isArray(r.currencies) ? r.currencies.join(", ") : String(r.currencies)}</div>
+                            <div><span className="text-muted-foreground">Timezones:</span> {Array.isArray(r.timezones) ? r.timezones.slice(0, 3).join(", ") : String(r.timezones)}{Array.isArray(r.timezones) && r.timezones.length > 3 ? ` +${(r.timezones as string[]).length - 3} more` : ""}</div>
+                          </div>
+                          {r.maps ? (
+                            <a href={String(r.maps)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-primary underline-offset-2 hover:underline">
+                              Open in Maps ↗
+                            </a>
+                          ) : null}
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
                 </div>
               </motion.div>
             )}
