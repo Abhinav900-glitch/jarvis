@@ -418,10 +418,37 @@ export default function Dashboard() {
     navigate("/");
   };
 
-  // --- Voice output: Groq TTS per assistant message ---
+  // --- Voice output: Groq TTS → browser SpeechSynthesis fallback ---
+  const browserSpeakRef = useRef<SpeechSynthesisUtterance | null>(null);
+
+  const speakViaBrowser = (id: string, text: string) => {
+    const synth = window.speechSynthesis;
+    if (!synth) {
+      setAssistantError("Speech synthesis not supported in this browser.");
+      return;
+    }
+    synth.cancel();
+    const utt = new SpeechSynthesisUtterance(text.replace(/```[\s\S]*?```/g, " code block ").replace(/[#*_`~\[\]]/g, ""));
+    utt.rate = 1;
+    utt.pitch = 1;
+    utt.onend = () => {
+      browserSpeakRef.current = null;
+      player.setPlayingId(null);
+    };
+    utt.onerror = () => {
+      browserSpeakRef.current = null;
+      player.setPlayingId(null);
+    };
+    browserSpeakRef.current = utt;
+    player.setPlayingId(id);
+    synth.speak(utt);
+  };
+
   const handleSpeak = async (id: string, content: string) => {
+    // If already speaking this message, stop
     if (player.playingId === id) {
       player.stop();
+      window.speechSynthesis?.cancel();
       return;
     }
     player.setLoadingId(id);
@@ -430,8 +457,9 @@ export default function Dashboard() {
       const { audio } = await speakAction({ text: content });
       player.play(id, audio);
     } catch (err) {
-      setAssistantError(err instanceof Error ? err.message : "Speech failed.");
+      // Groq TTS failed — fall back to browser speech
       player.setLoadingId(null);
+      speakViaBrowser(id, content);
     }
   };
 

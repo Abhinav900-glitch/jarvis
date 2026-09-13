@@ -112,7 +112,7 @@ export function useVoicePlayer() {
   const play = useCallback(
     (id: string, audio: ArrayBuffer) => {
       stop();
-      const url = URL.createObjectURL(new Blob([audio], { type: "audio/wav" }));
+      const url = URL.createObjectURL(new Blob([audio], { type: "audio/mpeg" }));
       urlRef.current = url;
       const el = new Audio(url);
       el.onended = stop;
@@ -125,5 +125,5 @@ export function useVoicePlayer() {
 
   useEffect(() => stop, [stop]);
 
-  return { play, stop, playingId, loadingId, setLoadingId };
+  return { play, stop, playingId, loadingId, setLoadingId, setPlayingId };
 }

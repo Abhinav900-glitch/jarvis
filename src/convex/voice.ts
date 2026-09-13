@@ -150,17 +150,17 @@ export const transcribe = action({
 // ---------------------------------------------------------------------------
 
 const TTS_VOICES = [
-  "Arista-PlayAI",
-  "Atlas-PlayAI",
-  "Basil-PlayAI",
-  "Briggs-PlayAI",
-  "Calum-PlayAI",
-  "Celeste-PlayAI",
-  "Cheyenne-PlayAI",
-  "Chip-PlayAI",
+  "Jessica",
+  "River",
+  "Leo",
+  "Mia",
+  "Zac",
+  "Zoe",
+  "Alex",
+  "Ethan",
 ] as const;
 
-const TTS_MODEL = "playai-tts";
+const TTS_MODEL = "canopylabs/orpheus-v1-english";
 
 /** Speak text aloud with Groq PlayAI TTS. Returns WAV audio bytes. */
 export const speak = action({
@@ -174,7 +174,7 @@ export const speak = action({
 
     const voice = TTS_VOICES.includes((args.voice ?? "") as never)
       ? (args.voice as string)
-      : "Celeste-PlayAI";
+      : "Jessica";
 
     // PlayAI TTS caps input at 10K characters.
     const text = args.text.trim().slice(0, 10_000);
@@ -189,8 +189,8 @@ export const speak = action({
       body: JSON.stringify({
         model: TTS_MODEL,
         input: text,
-        voice,
-        response_format: "wav",
+        voice: voice,
+        response_format: "mp3",
       }),
     });
 
@@ -201,9 +201,12 @@ export const speak = action({
           "TTS needs one-time activation: open console.groq.com, accept the PlayAI TTS model terms, then try again.",
         );
       }
-      throw new Error(`Speech synthesis failed (${res.status})`);
+      // Log full response for debugging — shows in Convex function logs
+      console.error("Groq TTS error", res.status, errText);
+      throw new Error(`Speech synthesis failed (${res.status}): ${errText.slice(0, 200)}`);
     }
 
-    return { audio: await res.arrayBuffer(), voice };
+    const audioBuffer = await res.arrayBuffer();
+    return { audio: audioBuffer, voice };
   },
 });
