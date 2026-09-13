@@ -50,6 +50,7 @@ import {
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/hooks/use-auth";
 import { useVoicePlayer, useVoiceRecorder } from "@/hooks/use-voice";
+import { CalculatorPanel } from "@/components/calculator-panel";
 
 // ---------------------------------------------------------------------------
 // Source types
@@ -401,6 +402,7 @@ export default function Dashboard() {
   });
   const [regionResult, setRegionResult] = useState<Record<string, unknown> | null>(null);
   const [regionBusy, setRegionBusy] = useState(false);
+  const [showCalculator, setShowCalculator] = useState(false);
 
   const editMessage = useMutation(api.chats.editMessage);
   const searchSessionsQuery = useQuery(
@@ -628,6 +630,7 @@ export default function Dashboard() {
     setPendingFile(null);
     setEditingId(null);
     setRegionResult(null);
+    setShowCalculator(false);
     player.stop();
   }, [activeId]);
 
@@ -658,6 +661,19 @@ export default function Dashboard() {
       localStorage.setItem("jarvis-timezone", regionTimezone);
     } catch { /* ignore */ }
   }, [regionTimezone]);
+
+  // Global keyboard shortcuts
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "k") {
+        e.preventDefault();
+        setShowCalculator((v) => !v);
+        setRegionResult(null);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
 
   // Edit a user message: load into input, delete all later messages
   const handleEditMessage = async (msgId: Id<"chatMessages">, content: string) => {
@@ -1294,6 +1310,13 @@ export default function Dashboard() {
                     🌍 Country info
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => { setShowCalculator((v) => !v); setRegionResult(null); }}>
+                    🧮 Calculator (ML & Math)
+                    {showCalculator ? (
+                      <Check className="ml-auto size-4" />
+                    ) : null}
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={handleAnalyze} disabled={!lastMsg}>
                     <Languages className="size-4" />
                     Analyze last message
@@ -1370,6 +1393,8 @@ export default function Dashboard() {
                 <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">/weather</code>{" "}
                 <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">/currency</code>{" "}
                 <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">/country</code>
+                <span className="ml-1 text-muted-foreground/60">|</span>
+                <kbd className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">Ctrl+K</kbd> Calculator
               </span>
             </div>
           </div>
@@ -1379,11 +1404,16 @@ export default function Dashboard() {
             {!messages || messages.length === 0 ? (
               <div className="mx-auto flex h-full max-w-2xl flex-col items-center justify-center px-6">
                 <div className="relative">
-                  <JarvisIcon className="size-10 text-muted-foreground/30" />
-                  <Sparkles
-                    className="absolute -top-1 -right-1 size-3.5 text-muted-foreground/50"
-                    strokeWidth={1.5}
-                  />
+                  <div className="animate-[spin_8s_linear_infinite]">
+                    <JarvisIcon className="size-14 text-muted-foreground/20" />
+                  </div>
+                  <motion.div
+                    className="absolute inset-0 flex items-center justify-center"
+                    animate={{ scale: [1, 1.1, 1], opacity: [0.3, 0.6, 0.3] }}
+                    transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+                  >
+                    <Sparkles className="size-5 text-muted-foreground/40" strokeWidth={1.5} />
+                  </motion.div>
                 </div>
                 <h1 className="mt-6 text-2xl font-semibold tracking-tight">
                   How can I help?
@@ -1444,6 +1474,9 @@ export default function Dashboard() {
                   </span>
                   <span className="inline-flex items-center gap-1">
                     🌐 Region
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    🧮 ML & Math
                   </span>
                   <span className="inline-flex items-center gap-1">
                     <Zap className="size-3" /> Auto-fallback
@@ -1711,6 +1744,13 @@ export default function Dashboard() {
                   )}
                 </div>
               </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* ---- Calculator panel ---- */}
+          <AnimatePresence>
+            {showCalculator && (
+              <CalculatorPanel onClose={() => setShowCalculator(false)} />
             )}
           </AnimatePresence>
 
