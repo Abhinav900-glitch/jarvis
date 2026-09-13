@@ -136,3 +136,211 @@
     cursor: pointer;
   }
 }
+
+/* --------------------------------------------------------------------------
+   Markdown prose — minimal, hairline rules, generous rhythm
+   -------------------------------------------------------------------------- */
+
+.md-body {
+  line-height: 1.75;
+  overflow-wrap: break-word;
+}
+
+.md-body > :first-child {
+  margin-top: 0;
+}
+.md-body > :last-child {
+  margin-bottom: 0;
+}
+
+.md-body p {
+  margin: 0.85em 0;
+}
+
+.md-body h1,
+.md-body h2,
+.md-body h3,
+.md-body h4 {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 1.4em 0 0.5em;
+}
+.md-body h1 {
+  font-size: 1.25rem;
+}
+.md-body h2 {
+  font-size: 1.1rem;
+}
+.md-body h3,
+.md-body h4 {
+  font-size: 1rem;
+}
+
+.md-body ul,
+.md-body ol {
+  margin: 0.85em 0;
+  padding-left: 1.4em;
+}
+.md-body ul {
+  list-style: disc;
+}
+.md-body ol {
+  list-style: decimal;
+}
+.md-body li {
+  margin: 0.3em 0;
+}
+.md-body li > p {
+  margin: 0.2em 0;
+}
+
+.md-body blockquote {
+  margin: 1em 0;
+  border-left: 2px solid var(--border);
+  padding-left: 1em;
+  color: var(--muted-foreground);
+}
+
+.md-body hr {
+  margin: 1.5em 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.md-body table {
+  width: 100%;
+  margin: 1em 0;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+.md-body th {
+  font-weight: 600;
+  text-align: left;
+}
+.md-body th,
+.md-body td {
+  border: 1px solid var(--border);
+  padding: 0.4em 0.7em;
+}
+.md-body thead th {
+  background: var(--muted);
+}
+
+.md-body img {
+  max-width: 100%;
+  border-radius: var(--radius-sm);
+}
+
+/* Inline code chips (block code is styled by the component wrapper) */
+.md-body pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+.md-body code {
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.md-body pre {
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* --------------------------------------------------------------------------
+   Syntax highlighting — near-monochrome gradient, matching the Minimalism
+   theme (works on light and dark since it derives from theme tokens)
+   -------------------------------------------------------------------------- */
+
+.md-body pre code.hljs {
+  display: block;
+  color: var(--foreground);
+  background: transparent;
+}
+
+.md-body .hljs-comment,
+.md-body .hljs-quote {
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
+.md-body .hljs-keyword,
+.md-body .hljs-selector-tag,
+.md-body .hljs-meta .hljs-keyword,
+.md-body .hljs-doctag,
+.md-body .hljs-section,
+.md-body .hljs-selector-id,
+.md-body .hljs-title {
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+.md-body .hljs-string,
+.md-body .hljs-regexp,
+.md-body .hljs-symbol,
+.md-body .hljs-bullet,
+.md-body .hljs-link,
+.md-body .hljs-addition {
+  color: oklch(0.52 0.06 155);
+}
+.dark .md-body .hljs-string,
+.dark .md-body .hljs-regexp,
+.dark .md-body .hljs-symbol,
+.dark .md-body .hljs-bullet,
+.dark .md-body .hljs-link,
+.dark .md-body .hljs-addition {
+  color: oklch(0.75 0.08 155);
+}
+
+.md-body .hljs-number,
+.md-body .hljs-literal,
+.md-body .hljs-type,
+.md-body .hljs-template-variable,
+.md-body .hljs-variable,
+.md-body .hljs-attr,
+.md-body .hljs-attribute,
+.md-body .hljs-selector-attr,
+.md-body .hljs-selector-class,
+.md-body .hljs-meta {
+  color: oklch(0.5 0.07 250);
+}
+.dark .md-body .hljs-number,
+.dark .md-body .hljs-literal,
+.dark .md-body .hljs-type,
+.dark .md-body .hljs-template-variable,
+.dark .md-body .hljs-variable,
+.dark .md-body .hljs-attr,
+.dark .md-body .hljs-attribute,
+.dark .md-body .hljs-selector-attr,
+.dark .md-body .hljs-selector-class,
+.dark .md-body .hljs-meta {
+  color: oklch(0.74 0.07 250);
+}
+
+.md-body .hljs-built_in,
+.md-body .hljs-class .hljs-title,
+.md-body .hljs-title.class_,
+.md-body .hljs-title.function_,
+.md-body .hljs-name,
+.md-body .hljs-tag {
+  color: oklch(0.5 0.07 25);
+}
+.dark .md-body .hljs-built_in,
+.dark .md-body .hljs-class .hljs-title,
+.dark .md-body .hljs-title.class_,
+.dark .md-body .hljs-title.function_,
+.dark .md-body .hljs-name,
+.dark .md-body .hljs-tag {
+  color: oklch(0.76 0.07 25);
+}
+
+.md-body .hljs-deletion {
+  color: var(--destructive);
+}
+.md-body .hljs-emphasis {
+  font-style: italic;
+}
+.md-body .hljs-strong {
+  font-weight: 600;
+}

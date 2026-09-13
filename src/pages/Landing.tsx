@@ -50,6 +50,7 @@ const specs = [
   { label: "Search layer", value: "Serpstack live web results" },
   { label: "Language layer", value: "apilayer NLP" },
   { label: "News layer", value: "mediastack" },
+  { label: "Rendering", value: "Markdown + syntax highlighting" },
   { label: "Persistence", value: "Convex — every chat saved" },
 ];
 

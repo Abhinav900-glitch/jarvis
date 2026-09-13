@@ -13,9 +13,9 @@ import {
   Sparkles,
   Trash2,
   Zap,
-} from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+} from "lucide-react";import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
+import { MarkdownMessage } from "@/components/markdown-message";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -40,31 +40,9 @@ interface NewsItem {
 }
 
 // ---------------------------------------------------------------------------
-// Message rendering — minimal inline citation + source list
+// Message rendering — citations are handled inside MarkdownMessage; user
+// messages render as plain pre-wrapped text.
 // ---------------------------------------------------------------------------
-
-function renderCitations(text: string, sources?: Source[]) {
-  if (!sources || sources.length === 0) return text;
-  const parts = text.split(/(\[\d+\])/g);
-  return parts.map((part, i) => {
-    const m = part.match(/^\[(\d+)\]$/);
-    if (!m) return part;
-    const n = parseInt(m[1], 10);
-    const src = sources[n - 1];
-    if (!src) return part;
-    return (
-      <a
-        key={i}
-        href={src.url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="mx-px inline-flex h-4 min-w-4 items-center justify-center rounded-sm border px-0.5 text-[10px] leading-none align-super text-muted-foreground hover:text-foreground hover:border-foreground/40 transition-colors"
-      >
-        {n}
-      </a>
-    );
-  });
-}
 
 function SourceList({ sources }: { sources: Source[] }) {
   return (
@@ -465,13 +443,15 @@ export default function Dashboard() {
                           </span>
                         ) : null}
                       </div>
-                      <div
-                        className={`mt-2 text-sm leading-7 whitespace-pre-wrap ${
-                          m.role === "user" ? "text-foreground" : "text-foreground/90"
-                        }`}
-                      >
-                        {renderCitations(m.content, m.sources)}
-                      </div>
+                      {m.role === "user" ? (
+                        <div className="mt-2 text-sm leading-7 whitespace-pre-wrap text-foreground">
+                          {m.content}
+                        </div>
+                      ) : (
+                        <div className="mt-2 text-sm text-foreground/90">
+                          <MarkdownMessage content={m.content} sources={m.sources} />
+                        </div>
+                      )}
                       {m.role === "assistant" && m.sources && m.sources.length > 0 ? (
                         <SourceList sources={m.sources} />
                       ) : null}
