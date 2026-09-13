@@ -36,28 +36,44 @@ async function callGroq(
   key: string,
   turns: ChatTurn[],
 ): Promise<LlmResult> {
-  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "llama-3.1-8b-instant",
-      messages: [{ role: "system", content: JARVIS_PROMPT }, ...turns],
-      temperature: 0.6,
-      max_tokens: 1500,
-    }),
-  });
-  if (!res.ok) {
-    throw new Error(`Groq request failed (${res.status})`);
+  // Reasoning model first (higher quality), then a fast non-reasoning model.
+  // gpt-oss burns tokens on hidden reasoning, so the budget is generous and an
+  // empty content (all tokens spent reasoning) retries with the next model.
+  const models = [
+    { id: "openai/gpt-oss-120b", label: "gpt-oss-120b" },
+    { id: "qwen/qwen3.8-27b", label: "qwen3.8-27b" },
+  ];
+
+  const failures: string[] = [];
+  for (const m of models) {
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: m.id,
+        messages: [{ role: "system", content: JARVIS_PROMPT }, ...turns],
+        temperature: 0.6,
+        max_tokens: 4096,
+      }),
+    });
+    if (!res.ok) {
+      failures.push(`${m.label} (${res.status})`);
+      continue;
+    }
+    const data = (await res.json()) as {
+      choices?: { message?: { content?: string } }[];
+    };
+    const text = data.choices?.[0]?.message?.content?.trim();
+    if (!text) {
+      failures.push(`${m.label} (empty response)`);
+      continue;
+    }
+    return { text, model: `groq/${m.label}`, usedFallback: false };
   }
-  const data = (await res.json()) as {
-    choices?: { message?: { content?: string } }[];
-  };
-  const text = data.choices?.[0]?.message?.content?.trim();
-  if (!text) throw new Error("Groq returned an empty response");
-  return { text, model: "groq/llama-3.1-8b-instant", usedFallback: false };
+  throw new Error(`Groq failed: ${failures.join(", ")}`);
 }
 
 async function callHuggingFace(

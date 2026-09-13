@@ -45,8 +45,8 @@ const pillars = [
 ];
 
 const specs = [
-  { label: "Primary model", value: "Groq · Llama 3.1 8B Instant" },
-  { label: "Fallback model", value: "Hugging Face · Llama 3.1 8B Instruct" },
+  { label: "Primary model", value: "Groq · GPT-OSS 120B → Qwen 3.8" },
+  { label: "Fallback model", value: "Hugging Face · Qwen2.5 / Gemma 2" },
   { label: "Search layer", value: "Serpstack live web results" },
   { label: "Language layer", value: "apilayer NLP" },
   { label: "News layer", value: "mediastack" },
