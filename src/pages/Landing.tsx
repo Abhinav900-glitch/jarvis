@@ -6,10 +6,12 @@ import {
   Globe,
   Languages,
   Layers,
+  Mic,
   ShieldCheck,
   Terminal,
 } from "lucide-react";
 import { Link } from "react-router";
+import { JarvisIcon } from "@/components/jarvis-icon";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { useAuth } from "@/hooks/use-auth";
@@ -42,6 +44,11 @@ const pillars = [
     title: "Live news wire",
     body: "mediastack brings the latest headlines into the chat, so Jarvis can talk about what's happening right now, not just what it memorized.",
   },
+  {
+    icon: Mic,
+    title: "Voice conversations",
+    body: "Speak instead of typing — AssemblyAI transcribes your voice notes with sentiment analysis and summaries, and Jarvis answers aloud with built-in speech synthesis.",
+  },
 ];
 
 const specs = [
@@ -51,15 +58,14 @@ const specs = [
   { label: "Language layer", value: "apilayer NLP" },
   { label: "News layer", value: "mediastack" },
   { label: "Rendering", value: "Markdown + syntax highlighting" },
+  { label: "Voice", value: "AssemblyAI STT · Groq speech" },
   { label: "Persistence", value: "Convex — every chat saved" },
 ];
 
 function Wordmark() {
   return (
     <span className="flex items-center gap-2">
-      <span className="flex size-6 items-center justify-center rounded-sm border border-foreground/20">
-        <span className="size-1.5 rounded-full bg-foreground" />
-      </span>
+      <JarvisIcon className="size-5" />
       <span className="text-sm font-semibold tracking-tight">JARVIS</span>
     </span>
   );
@@ -117,7 +123,7 @@ export default function Landing() {
           A minimalist AI assistant built on a dual-model engine. Groq answers
           first; if it ever fails, Hugging Face takes over the same turn
           automatically. Flip on Deep Research and Jarvis reads the live web
-          before it replies.
+          before it replies — or just speak to it and hear the answer aloud.
         </motion.p>
         <motion.div {...fadeUp} className="mt-10 flex flex-wrap items-center gap-3">
           <Button asChild size="lg" className="px-6">

@@ -1,25 +1,31 @@
 import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import type { Id } from "@/convex/_generated/dataModel";
-import { AnimatePresence, motion } from "framer-motion";
+import type { Id } from "@/convex/_generated/dataModel";import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowUp,
   Globe,
   Languages,
   Loader2,
+  Mic,
   Newspaper,
   Plus,
   RotateCcw,
   Sparkles,
+  Square,
   Trash2,
+  Volume2,
+  VolumeX,
   Zap,
-} from "lucide-react";import { useEffect, useRef, useState } from "react";
+} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
+import { JarvisIcon } from "@/components/jarvis-icon";
 import { MarkdownMessage } from "@/components/markdown-message";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/hooks/use-auth";
+import { useVoicePlayer, useVoiceRecorder } from "@/hooks/use-voice";
 
 // ---------------------------------------------------------------------------
 // Source types (mirror of convex/ai.ts return shapes)
@@ -135,6 +141,74 @@ function NewsPanel({ items }: { items: NewsItem[] }) {
 }
 
 // ---------------------------------------------------------------------------
+// Voice panel — AssemblyAI transcript with sentiment + summary
+// ---------------------------------------------------------------------------
+
+interface VoiceNoteResult {
+  text: string;
+  summary?: string;
+  sentiment: { positive: number; neutral: number; negative: number };
+  chapters?: { headline: string; summary: string }[];
+}
+
+function SentimentBar({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: string;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="w-14 text-[10px] uppercase tracking-widest text-muted-foreground">
+        {label}
+      </span>
+      <div className="h-1 flex-1 overflow-hidden rounded-full bg-muted">
+        <div className={`h-full rounded-full ${tone}`} style={{ width: `${value}%` }} />
+      </div>
+      <span className="w-8 text-right text-[10px] text-muted-foreground">{value}%</span>
+    </div>
+  );
+}
+
+function VoicePanel({
+  note,
+  onUse,
+}: {
+  note: VoiceNoteResult;
+  onUse: (text: string) => void;
+}) {
+  return (
+    <div className="border-t pt-3">
+      <div className="flex items-center justify-between">
+        <p className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
+          Voice note — AssemblyAI
+        </p>
+        <button
+          onClick={() => onUse(note.text)}
+          className="text-[10px] uppercase tracking-widest text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+        >
+          Use text
+        </button>
+      </div>
+      <p className="mt-2 text-sm leading-6">{note.text}</p>
+      {note.summary ? (
+        <p className="mt-2 border-l-2 border-border pl-3 text-xs leading-5 text-muted-foreground">
+          {note.summary}
+        </p>
+      ) : null}
+      <div className="mt-3 space-y-1.5">
+        <SentimentBar label="Positive" value={note.sentiment.positive} tone="bg-foreground" />
+        <SentimentBar label="Neutral" value={note.sentiment.neutral} tone="bg-muted-foreground/50" />
+        <SentimentBar label="Negative" value={note.sentiment.negative} tone="bg-destructive/60" />
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
@@ -156,6 +230,8 @@ export default function Dashboard() {
   const deepResearchAction = useAction(api.ai.deepResearch);
   const analyzeAction = useAction(api.ai.analyzeText);
   const newsAction = useAction(api.ai.searchNews);
+  const transcribeAction = useAction(api.voice.transcribe);
+  const speakAction = useAction(api.voice.speak);
 
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -164,6 +240,31 @@ export default function Dashboard() {
   const [panelNlp, setPanelNlp] = useState<NlpResult | null>(null);
   const [panelNews, setPanelNews] = useState<NewsItem[] | null>(null);
   const [panelBusy, setPanelBusy] = useState<"nlp" | "news" | null>(null);
+  const [panelVoice, setPanelVoice] = useState<VoiceNoteResult | null>(null);
+  const [transcribing, setTranscribing] = useState(false);
+
+  // --- Voice output: Groq TTS per assistant message ---
+  const player = useVoicePlayer();
+
+  // --- Voice input: record → transcribe (AssemblyAI) → fill composer ---
+  const handleRecording = async (blob: Blob) => {
+    setTranscribing(true);
+    setAssistantError(null);
+    setPanelVoice(null);
+    try {
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      const result = (await transcribeAction({ audio: bytes.buffer })) as VoiceNoteResult;
+      setPanelVoice(result);
+      setInput(result.text);
+      inputRef.current?.focus();
+    } catch (err) {
+      setAssistantError(err instanceof Error ? err.message : "Transcription failed.");
+    } finally {
+      setTranscribing(false);
+    }
+  };
+
+  const recorder = useVoiceRecorder(handleRecording);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -177,6 +278,8 @@ export default function Dashboard() {
     setAssistantError(null);
     setPanelNlp(null);
     setPanelNews(null);
+    setPanelVoice(null);
+    player.stop();
   }, [activeId]);
 
   const runSend = async () => {
@@ -187,6 +290,8 @@ export default function Dashboard() {
     setAssistantError(null);
     setPanelNlp(null);
     setPanelNews(null);
+    setPanelVoice(null);
+    if (recorder.recording) recorder.stop();
     setInput("");
 
     try {
@@ -285,6 +390,23 @@ export default function Dashboard() {
     navigate("/");
   };
 
+  // --- Voice output: Groq TTS per assistant message ---
+  const handleSpeak = async (id: string, content: string) => {
+    if (player.playingId === id) {
+      player.stop();
+      return;
+    }
+    player.setLoadingId(id);
+    setAssistantError(null);
+    try {
+      const { audio } = await speakAction({ text: content });
+      player.play(id, audio);
+    } catch (err) {
+      setAssistantError(err instanceof Error ? err.message : "Speech failed.");
+      player.setLoadingId(null);
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -298,7 +420,10 @@ export default function Dashboard() {
         {/* Sidebar */}
         <aside className="hidden w-64 shrink-0 flex-col border-r bg-sidebar md:flex">
           <div className="flex items-center justify-between px-5 py-4">
-            <span className="text-sm font-semibold tracking-tight">JARVIS</span>
+            <span className="flex items-center gap-2">
+              <JarvisIcon className="size-5" />
+              <span className="text-sm font-semibold tracking-tight">JARVIS</span>
+            </span>
             <Button
               variant="ghost"
               size="icon-sm"
@@ -433,15 +558,36 @@ export default function Dashboard() {
                         <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
                           {m.role === "user" ? "You" : "Jarvis"}
                         </span>
-                        {m.role === "assistant" && (m.usedFallback || m.usedSearch) ? (
-                          <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                            {m.usedSearch && <Globe className="size-3" />}
-                            {m.usedFallback && <RotateCcw className="size-3" />}
-                            {m.usedSearch ? "web" : "fallback"}
-                            {" · "}
-                            {m.model?.split("/")[0]}
+                        {m.role === "assistant" && (
+                          <span className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                            {m.usedSearch || m.usedFallback ? (
+                              <span className="flex items-center gap-1">
+                                {m.usedSearch && <Globe className="size-3" />}
+                                {m.usedFallback && <RotateCcw className="size-3" />}
+                                {m.usedSearch ? "web" : "fallback"}
+                                {" · "}
+                                {m.model?.split("/")[0]}
+                              </span>
+                            ) : null}
+                            <button
+                              onClick={() => void handleSpeak(m._id, m.content)}
+                              title={
+                                player.playingId === m._id
+                                  ? "Stop playback"
+                                  : "Speak with Groq TTS"
+                              }
+                              className="rounded p-0.5 transition-colors hover:text-foreground"
+                            >
+                              {player.loadingId === m._id ? (
+                                <Loader2 className="size-3 animate-spin" />
+                              ) : player.playingId === m._id ? (
+                                <VolumeX className="size-3" />
+                              ) : (
+                                <Volume2 className="size-3" />
+                              )}
+                            </button>
                           </span>
-                        ) : null}
+                        )}
                       </div>
                       {m.role === "user" ? (
                         <div className="mt-2 text-sm leading-7 whitespace-pre-wrap text-foreground">
@@ -472,7 +618,7 @@ export default function Dashboard() {
 
           {/* Assistant panel — NLP / news / errors */}
           <AnimatePresence>
-            {(panelNlp || panelNews || assistantError) && (
+            {(panelNlp || panelNews || panelVoice || assistantError) && (
               <motion.div
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -493,6 +639,15 @@ export default function Dashboard() {
                     </pre>
                   )}
                   {panelNews && panelNews.length > 0 && <NewsPanel items={panelNews} />}
+                  {panelVoice && (
+                    <VoicePanel
+                      note={panelVoice}
+                      onUse={(t) => {
+                        setInput(t);
+                        inputRef.current?.focus();
+                      }}
+                    />
+                  )}
                 </div>
               </motion.div>
             )}
@@ -508,13 +663,41 @@ export default function Dashboard() {
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
                   placeholder={
-                    deepResearch
-                      ? "Research anything on the live web…"
-                      : "Message Jarvis…"
+                    recorder.recording
+                      ? "Listening… click the stop square when done."
+                      : deepResearch
+                        ? "Research anything on the live web…"
+                        : "Message Jarvis…"
                   }
                   rows={1}
-                  className="max-h-40 w-full resize-none bg-transparent px-4 py-3 pr-12 text-sm outline-none placeholder:text-muted-foreground/70"
+                  className="max-h-40 w-full resize-none bg-transparent px-4 py-3 pr-20 text-sm outline-none placeholder:text-muted-foreground/70"
                 />
+                <button
+                  onClick={() =>
+                    recorder.recording
+                      ? recorder.stop()
+                      : void recorder.start()
+                  }
+                  disabled={sending || transcribing}
+                  title={
+                    recorder.recording
+                      ? "Stop recording"
+                      : "Record a voice note (AssemblyAI)"
+                  }
+                  className={`absolute right-11 bottom-2.5 inline-flex size-7 items-center justify-center rounded-md transition-colors ${
+                    recorder.recording
+                      ? "bg-destructive text-white"
+                      : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                  } disabled:opacity-40`}
+                >
+                  {transcribing ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : recorder.recording ? (
+                    <Square className="size-3" />
+                  ) : (
+                    <Mic className="size-3.5" />
+                  )}
+                </button>
                 <Button
                   size="icon-sm"
                   onClick={() => void runSend()}
@@ -529,9 +712,15 @@ export default function Dashboard() {
                 </Button>
               </div>
               <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
-                <span>
-                  Enter to send · Shift+Enter for newline
-                </span>
+                {recorder.recording ? (
+                  <span className="flex items-center gap-1.5 text-destructive">
+                    <span className="size-1.5 animate-pulse rounded-full bg-destructive" />
+                    Recording {Math.floor(recorder.seconds / 60)}:
+                    {String(recorder.seconds % 60).padStart(2, "0")}
+                  </span>
+                ) : (
+                  <span>Enter to send · Shift+Enter for newline</span>
+                )}
                 <div className="flex items-center gap-3">
                   <button
                     onClick={handleNews}
