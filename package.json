@@ -11,6 +11,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@capacitor/android": "^8.5.2",
+    "@capacitor/core": "^8.5.2",
     "@cloudinary/url-gen": "^1.22.0",
     "@convex-dev/auth": "^0.0.90",
     "@hookform/resolvers": "^5.2.2",
@@ -77,6 +79,7 @@
     "zod": "^4.1.13"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.5.2",
     "@eslint/js": "^9.39.1",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.7",
