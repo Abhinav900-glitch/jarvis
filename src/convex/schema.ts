@@ -68,6 +68,10 @@ const schema = defineSchema(
       ),
       imageUrl: v.optional(v.string()),
       imagePublicId: v.optional(v.string()),
+      fileUrl: v.optional(v.string()),
+      fileName: v.optional(v.string()),
+      fileType: v.optional(v.string()),
+      fileSize: v.optional(v.number()),
       createdAt: v.number(),
     }).index("by_session", ["sessionId"]),
 

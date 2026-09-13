@@ -5,8 +5,9 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowUp,
   Check,
+  FileText,
   Globe,
-  Image,
+  ImagePlus,
   Languages,
   Loader2,
   Mic,
@@ -22,6 +23,7 @@ import {
   User,
   Volume2,
   VolumeX,
+  Wand2,
   X,
   Zap,
   Home,
@@ -272,6 +274,7 @@ export default function Dashboard() {
   const transcribeAction = useAction(api.voice.transcribe);
   const speakAction = useAction(api.voice.speak);
   const getSignedUploadUrl = useAction(api.cloudinary.getSignedUploadUrl);
+  const generateImageAction = useAction(api.cloudinary.generateImage);
 
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -287,8 +290,115 @@ export default function Dashboard() {
     url: string;
     publicId: string;
   } | null>(null);
+  const [pendingFile, setPendingFile] = useState<{
+    url: string;
+    name: string;
+    type: string;
+    size: number;
+  } | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [generatingPrompt, setGeneratingPrompt] = useState("");
+  const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // ---- File upload: any type, signed upload to Cloudinary ----
+  const uploadFile = async (file: File): Promise<void> => {
+    setUploading(true);
+    setAssistantError(null);
+    try {
+      const signed = await getSignedUploadUrl({ filename: file.name });
+
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("api_key", signed.apiKey);
+      formData.append("timestamp", String(signed.timestamp));
+      formData.append("signature", signed.signature);
+      formData.append("folder", signed.folder);
+      formData.append("public_id", signed.publicId);
+
+      const res = await fetch(signed.url, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const err = await res.text();
+        throw new Error(`Upload failed: ${err.slice(0, 200)}`);
+      }
+
+      const data = (await res.json()) as {
+        secure_url: string;
+        public_id: string;
+        resource_type: string;
+      };
+
+      if (data.resource_type === "image") {
+        setPendingImage({ url: data.secure_url, publicId: data.public_id });
+      } else {
+        setPendingFile({
+          url: data.secure_url,
+          name: file.name,
+          type: file.type || data.resource_type,
+          size: file.size,
+        });
+      }
+    } catch (err) {
+      setAssistantError(
+        err instanceof Error ? err.message : "Upload failed.",
+      );
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    void uploadFile(file);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) void uploadFile(file);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setDragOver(false);
+    }
+  };
+
+  // ---- AI image generation (Cloudinary Image Generation add-on) ----
+  const handleGenerateImage = async () => {
+    const prompt = generatingPrompt.trim() || input.trim();
+    if (!prompt || generating) return;
+
+    setGenerating(true);
+    setAssistantError(null);
+    setGeneratingPrompt("");
+    try {
+      const { url, publicId } = await generateImageAction({ prompt });
+      setPendingImage({ url, publicId });
+      setInput("");
+      inputRef.current?.focus();
+    } catch (err) {
+      setAssistantError(
+        err instanceof Error ? err.message : "Image generation failed.",
+      );
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   const [voiceOutput, setVoiceOutput] = useState(() => {
     try {
@@ -369,60 +479,9 @@ export default function Dashboard() {
     player.stop();
   }, [activeId]);
 
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = "";
-
-    setUploading(true);
-    setAssistantError(null);
-    try {
-      // Get signed URL from Convex
-      const signed = await getSignedUploadUrl({
-        filename: file.name,
-      });
-
-      // Upload directly to Cloudinary
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("api_key", signed.apiKey);
-      formData.append("timestamp", String(signed.timestamp));
-      formData.append("signature", signed.signature);
-      formData.append("folder", signed.folder);
-      formData.append("public_id", signed.publicId);
-      formData.append("upload_preset", "jarvis_unsigned");
-
-      const res = await fetch(signed.url, {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!res.ok) {
-        const err = await res.text();
-        throw new Error(`Upload failed: ${err.slice(0, 200)}`);
-      }
-
-      const data = (await res.json()) as {
-        secure_url: string;
-        public_id: string;
-      };
-
-      setPendingImage({
-        url: data.secure_url,
-        publicId: data.public_id,
-      });
-    } catch (err) {
-      setAssistantError(
-        err instanceof Error ? err.message : "Image upload failed.",
-      );
-    } finally {
-      setUploading(false);
-    }
-  };
-
   const runSend = async () => {
     const text = input.trim();
-    if ((!text && !pendingImage) || sending) return;
+    if ((!text && !pendingImage && !pendingFile) || sending) return;
 
     setSending(true);
     setAssistantError(null);
@@ -434,10 +493,20 @@ export default function Dashboard() {
     const imagePayload = pendingImage
       ? { imageUrl: pendingImage.url, imagePublicId: pendingImage.publicId }
       : undefined;
+    const filePayload = pendingFile
+      ? {
+          fileUrl: pendingFile.url,
+          fileName: pendingFile.name,
+          fileType: pendingFile.type,
+          fileSize: pendingFile.size,
+        }
+      : undefined;
     setPendingImage(null);
+    setPendingFile(null);
     setInput("");
 
-    const messageContent = text || (imagePayload ? "[Image]" : "");
+    const messageContent =
+      text || (imagePayload ? "[Image]" : filePayload ? `[File: ${filePayload.fileName}]` : "");
 
     try {
       let sessionId: Id<"chatSessions">;
@@ -447,6 +516,7 @@ export default function Dashboard() {
         const { sessionId: sid } = await startWithMessage({
           content: messageContent,
           ...imagePayload,
+          ...filePayload,
         });
         sessionId = sid;
         setActiveId(sid);
@@ -457,6 +527,7 @@ export default function Dashboard() {
           role: "user",
           content: messageContent,
           ...imagePayload,
+          ...filePayload,
         });
         history = (messages ?? []).map((m) => ({
           role: m.role,
@@ -785,7 +856,12 @@ export default function Dashboard() {
         </AnimatePresence>
 
         {/* ---- Main area ---- */}
-        <main className="flex min-w-0 flex-1 flex-col">
+        <main
+          className="flex min-w-0 flex-1 flex-col"
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
           {/* ---- Menu bar ---- */}
           <header className="flex items-center justify-between border-b px-4 py-2 sm:px-6">
             {/* Left: hamburger + title */}
@@ -1027,7 +1103,27 @@ export default function Dashboard() {
                               className="mb-2 max-h-64 w-auto rounded-lg border object-contain"
                             />
                           ) : null}
-                          {m.content && m.content !== "[Image]" ? (
+                          {m.fileUrl ? (
+                            <a
+                              href={m.fileUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="mb-2 flex max-w-xs items-center gap-2 rounded-lg border bg-card px-3 py-2 text-xs transition-colors hover:bg-accent"
+                            >
+                              <FileText className="size-4 shrink-0 text-muted-foreground" />
+                              <span className="min-w-0 flex-1 truncate font-medium">
+                                {m.fileName ?? "Attachment"}
+                              </span>
+                              {m.fileSize ? (
+                                <span className="shrink-0 text-muted-foreground">
+                                  {(m.fileSize / 1024).toFixed(0)} KB
+                                </span>
+                              ) : null}
+                            </a>
+                          ) : null}
+                          {m.content &&
+                          m.content !== "[Image]" &&
+                          !m.content.startsWith("[File:") ? (
                             <div className="text-sm leading-7 whitespace-pre-wrap text-foreground">
                               {m.content}
                             </div>
@@ -1107,44 +1203,94 @@ export default function Dashboard() {
           {/* ---- Composer ---- */}
           <div className="border-t px-4 py-3 sm:px-6 sm:py-4">
             <div className="mx-auto max-w-2xl">
-              <div className="rounded-xl border bg-card transition-colors focus-within:border-foreground/30 focus-within:shadow-sm">
+              <div
+                onDrop={handleDrop}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                className={`relative rounded-xl border bg-card transition-all focus-within:border-foreground/30 focus-within:shadow-sm ${
+                  dragOver
+                    ? "border-foreground/50 bg-accent/50 ring-2 ring-foreground/10"
+                    : ""
+                }`}
+              >
+                {dragOver ? (
+                  <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-1.5 rounded-xl bg-background/80">
+                    <ImagePlus className="size-5 text-muted-foreground" />
+                    <p className="text-xs font-medium text-muted-foreground">
+                      Drop file to attach
+                    </p>
+                  </div>
+                ) : null}
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept="image/*"
                   className="hidden"
-                  onChange={handleImageUpload}
+                  onChange={handleFileInput}
                 />
-                {pendingImage ? (
-                  <div className="px-4 pt-3">
-                    <div className="relative inline-block">
-                      <img
-                        src={pendingImage.url}
-                        alt="Upload preview"
-                        className="max-h-32 w-auto rounded-lg border object-contain"
-                      />
-                      <button
-                        onClick={() => setPendingImage(null)}
-                        className="absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full bg-foreground text-background"
-                      >
-                        <X className="size-3" />
-                      </button>
-                    </div>
+                {/* Previews: image thumbnail + file chip */}
+                {pendingImage || pendingFile ? (
+                  <div className="flex flex-wrap items-center gap-2 px-4 pt-3">
+                    {pendingImage ? (
+                      <div className="relative inline-block">
+                        <img
+                          src={pendingImage.url}
+                          alt="Upload preview"
+                          className="h-20 w-auto rounded-lg border object-contain"
+                        />
+                        <button
+                          onClick={() => setPendingImage(null)}
+                          className="absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full bg-foreground text-background"
+                        >
+                          <X className="size-3" />
+                        </button>
+                      </div>
+                    ) : null}
+                    {pendingFile ? (
+                      <div className="relative inline-flex max-w-[240px] items-center gap-2 rounded-lg border bg-background px-3 py-2">
+                        <FileText className="size-4 shrink-0 text-muted-foreground" />
+                        <span className="min-w-0 flex-1 truncate text-xs font-medium">
+                          {pendingFile.name}
+                        </span>
+                        <span className="shrink-0 text-[10px] text-muted-foreground">
+                          {(pendingFile.size / 1024).toFixed(0)} KB
+                        </span>
+                        <button
+                          onClick={() => setPendingFile(null)}
+                          className="shrink-0 rounded-full p-0.5 text-muted-foreground hover:text-foreground"
+                        >
+                          <X className="size-3" />
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
                 <div className="relative flex items-end">
-                  <button
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={sending || uploading}
-                    title="Upload image"
-                    className="absolute left-2 bottom-2.5 inline-flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
-                  >
-                    {uploading ? (
-                      <Loader2 className="size-3.5 animate-spin" />
-                    ) : (
-                      <Paperclip className="size-3.5" />
-                    )}
-                  </button>
+                  <div className="absolute left-1.5 bottom-2 flex items-center gap-0.5">
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={sending || uploading}
+                      title="Attach file (or drag & drop)"
+                      className="inline-flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
+                    >
+                      {uploading ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <Paperclip className="size-3.5" />
+                      )}
+                    </button>
+                    <button
+                      onClick={() => void handleGenerateImage()}
+                      disabled={generating || (!input.trim() && !generatingPrompt.trim())}
+                      title="Generate image with AI (uses your message as prompt)"
+                      className="inline-flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
+                    >
+                      {generating ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <Wand2 className="size-3.5" />
+                      )}
+                    </button>
+                  </div>
                   <textarea
                     ref={inputRef}
                     value={input}
@@ -1158,7 +1304,7 @@ export default function Dashboard() {
                           : "Message Jarvis…"
                     }
                     rows={1}
-                    className="max-h-40 w-full resize-none bg-transparent pl-10 pr-24 py-3 text-sm outline-none placeholder:text-muted-foreground/70"
+                    className="max-h-40 w-full resize-none bg-transparent pl-20 pr-24 py-3 text-sm outline-none placeholder:text-muted-foreground/70"
                   />
                 <div className="absolute right-2 bottom-2 flex items-center gap-1">
                   <button
@@ -1190,7 +1336,7 @@ export default function Dashboard() {
                   <Button
                     size="icon-sm"
                     onClick={() => void runSend()}
-                    disabled={(!input.trim() && !pendingImage) || sending}
+                    disabled={(!input.trim() && !pendingImage && !pendingFile) || sending}
                     className="size-7 rounded-lg"
                   >
                     {sending ? (

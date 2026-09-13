@@ -113,6 +113,10 @@ export const appendMessage = mutation({
     ),
     imageUrl: v.optional(v.string()),
     imagePublicId: v.optional(v.string()),
+    fileUrl: v.optional(v.string()),
+    fileName: v.optional(v.string()),
+    fileType: v.optional(v.string()),
+    fileSize: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -134,6 +138,10 @@ export const appendMessage = mutation({
       sources: args.sources,
       imageUrl: args.imageUrl,
       imagePublicId: args.imagePublicId,
+      fileUrl: args.fileUrl,
+      fileName: args.fileName,
+      fileType: args.fileType,
+      fileSize: args.fileSize,
       createdAt: Date.now(),
     });
 
@@ -148,6 +156,10 @@ export const startWithMessage = mutation({
     content: v.string(),
     imageUrl: v.optional(v.string()),
     imagePublicId: v.optional(v.string()),
+    fileUrl: v.optional(v.string()),
+    fileName: v.optional(v.string()),
+    fileType: v.optional(v.string()),
+    fileSize: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -173,6 +185,10 @@ export const startWithMessage = mutation({
       content: args.content,
       imageUrl: args.imageUrl,
       imagePublicId: args.imagePublicId,
+      fileUrl: args.fileUrl,
+      fileName: args.fileName,
+      fileType: args.fileType,
+      fileSize: args.fileSize,
       createdAt: now,
     });
 
