@@ -31,6 +31,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { JarvisIcon } from "@/components/jarvis-icon";
+import { Lightbox } from "@/components/lightbox";
 import { MarkdownMessage } from "@/components/markdown-message";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -300,6 +301,7 @@ export default function Dashboard() {
   const [generating, setGenerating] = useState(false);
   const [generatingPrompt, setGeneratingPrompt] = useState("");
   const [dragOver, setDragOver] = useState(false);
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ---- File upload: any type, signed upload to Cloudinary ----
@@ -1097,11 +1099,17 @@ export default function Dashboard() {
                       {m.role === "user" ? (
                         <div className="mt-2 ml-8.5">
                           {m.imageUrl ? (
-                            <img
-                              src={m.imageUrl}
-                              alt="Uploaded image"
-                              className="mb-2 max-h-64 w-auto rounded-lg border object-contain"
-                            />
+                            <button
+                              onClick={() => setLightboxSrc(m.imageUrl!)}
+                              className="mb-2 block cursor-zoom-in"
+                              title="View full size"
+                            >
+                              <img
+                                src={m.imageUrl}
+                                alt="Uploaded image"
+                                className="max-h-64 w-auto rounded-lg border object-contain transition-opacity hover:opacity-90"
+                              />
+                            </button>
                           ) : null}
                           {m.fileUrl ? (
                             <a
@@ -1232,11 +1240,17 @@ export default function Dashboard() {
                   <div className="flex flex-wrap items-center gap-2 px-4 pt-3">
                     {pendingImage ? (
                       <div className="relative inline-block">
-                        <img
-                          src={pendingImage.url}
-                          alt="Upload preview"
-                          className="h-20 w-auto rounded-lg border object-contain"
-                        />
+                        <button
+                          onClick={() => setLightboxSrc(pendingImage.url)}
+                          className="block cursor-zoom-in"
+                          title="View full size"
+                        >
+                          <img
+                            src={pendingImage.url}
+                            alt="Upload preview"
+                            className="h-20 w-auto rounded-lg border object-contain transition-opacity hover:opacity-90"
+                          />
+                        </button>
                         <button
                           onClick={() => setPendingImage(null)}
                           className="absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full bg-foreground text-background"
@@ -1392,6 +1406,11 @@ export default function Dashboard() {
           </div>
         </main>
       </div>
+      <Lightbox
+        src={lightboxSrc}
+        alt="Chat image"
+        onClose={() => setLightboxSrc(null)}
+      />
     </TooltipProvider>
   );
 }
