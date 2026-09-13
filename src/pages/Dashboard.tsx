@@ -288,7 +288,7 @@ export default function Dashboard() {
   const [transcribing, setTranscribing] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [pendingImages, setPendingImages] = useState<
-    { url: string; publicId: string }[]
+    { url: string; publicId: string; provider?: string }[]
   >([]);
   const [pendingFile, setPendingFile] = useState<{
     url: string;
@@ -355,7 +355,8 @@ export default function Dashboard() {
     setAssistantError(null);
     try {
       const results = await Promise.all(files.map((f) => uploadFile(f)));
-      const images: { url: string; publicId: string }[] = [];
+      const images: { url: string; publicId: string; provider?: string }[] =
+        [];
       let firstFile: {
         url: string;
         name: string;
@@ -412,7 +413,7 @@ export default function Dashboard() {
     }
   };
 
-  // ---- AI image generation (Cloudinary Image Generation add-on) ----
+  // ---- AI image generation: Cloudinary → Hugging Face → Pollinations ----
   const handleGenerateImage = async () => {
     const prompt = input.trim();
     if (!prompt || generating) return;
@@ -420,8 +421,13 @@ export default function Dashboard() {
     setGenerating(true);
     setAssistantError(null);
     try {
-      const { url, publicId } = await generateImageAction({ prompt });
-      setPendingImages((prev) => [...prev, { url, publicId }]);
+      const { url, publicId, provider } = await generateImageAction({
+        prompt,
+      });
+      setPendingImages((prev) => [
+        ...prev,
+        { url, publicId, provider },
+      ]);
       setInput("");
       inputRef.current?.focus();
     } catch (err) {
@@ -1331,6 +1337,15 @@ export default function Dashboard() {
                             className="h-20 w-20 rounded-lg border object-cover transition-opacity hover:opacity-90"
                           />
                         </button>
+                        {img.provider ? (
+                          <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-white">
+                            {img.provider === "huggingface"
+                              ? "HF"
+                              : img.provider === "pollinations"
+                                ? "Poll"
+                                : "Cld"}
+                          </span>
+                        ) : null}
                         <button
                           onClick={() =>
                             setPendingImages((prev) =>
