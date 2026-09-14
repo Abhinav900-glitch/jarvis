@@ -47,6 +47,45 @@ export function sanitizeUrl(url: string, allowDataImage = false): string | undef
   return trimmed;
 }
 
+/** Does a snippet look like LaTeX content rather than plain prose/link text? */
+function isLatexish(s: string): boolean {
+  return (/[\\][a-zA-Z]+/.test(s) || /[_^{}]/.test(s) || /\bfrac\b/.test(s));
+}
+
+/**
+ * Strip invalid character sequences that LLMs occasionally emit and that KaTeX
+ * cannot parse (it then renders raw red LaTeX text):
+ *  - `!` glued after a command (e.g. `\int!`, `\arctan!\big`)
+ *  - a comma used as a thin space before differentials (e.g. `f(x),dx`)
+ */
+function stripMathArtifacts(input: string): string {
+  return input
+    .replace(/(\\[a-zA-Z]+)!/g, "$1")
+    .replace(/,\s*(d[a-zA-Z])(?![a-zA-Z])/g, "\\,$1");
+}
+
+/**
+ * Close any `\begin{env}` that never got its `\end{env}` inside a display
+ * block (truncated streams would otherwise fail to parse).
+ */
+function repairMathBlock(tex: string): string {
+  const opens = [...tex.matchAll(/\\begin\{([a-zA-Z*]+)\}/g)].map((m) => m[1]);
+  const closes = [...tex.matchAll(/\\end\{([a-zA-Z*]+)\}/g)].map((m) => m[1]);
+  const count = (arr: string[], s: string) => arr.filter((x) => x === s).length;
+  let out = tex;
+  for (const env of new Set(opens)) {
+    const missing = count(opens, env) - count(closes, env);
+    for (let i = 0; i < missing; i++) out += "\\end{" + env + "}";
+  }
+  return out;
+}
+
+function repairDisplayMath(input: string): string {
+  return input.replace(/\$\$([\s\S]+?)\$\$/g, (_m: string, tex: string) => {
+    return "$$" + repairMathBlock(tex) + "$$";
+  });
+}
+
 /**
  * Normalize AI-style LaTeX delimiters to remark-math's `$...$` / `$$...$$`.
  * Handles:
@@ -77,15 +116,13 @@ function normalizeMathDelimiters(input: string): string {
   const flushBracket = () => {
     if (bracketBuf.length > 0) {
       const inner = bracketBuf.join("\n").trim();
-      const latexish =
-        /\\[a-zA-Z]+/.test(inner) || /[_^{}]/.test(inner) || /\bfrac\b/.test(inner);
       const isLink = /^\[.*\]\(.*\)$/.test(inner);
-      if (inner && latexish && !isLink) {
+      if (inner && isLatexish(inner) && !isLink) {
         out.push("");
         out.push("$$" + inner + "$$");
         out.push("");
       } else {
-        out.push("[" + bracketBuf.join("\n"));
+        out.push("[" + bracketBuf.join("\n") + "]");
       }
       bracketBuf = [];
     }
@@ -100,20 +137,32 @@ function normalizeMathDelimiters(input: string): string {
       } else if (/^\s*\[([\s\S]+)\]\s*$/.test(line) && !/^\s*\[.*\]\(.*\)\s*$/.test(line)) {
         // Single-line [ ... ] bracket display
         const inner = line.trim().slice(1, -1).trim();
-        const latexish =
-          /\\[a-zA-Z]+/.test(inner) || /[_^{}]/.test(inner) || /\bfrac\b/.test(inner);
-        if (inner && latexish) {
+        if (inner && isLatexish(inner)) {
           out.push("");
           out.push("$$" + inner + "$$");
           out.push("");
         } else {
           out.push(line);
         }
+      } else if (
+        /^\s*\[\s+\S/.test(line) &&
+        isLatexish(line) &&
+        !/\]\s*$/.test(line) &&
+        !/\[.*\]\(.*\)/.test(line)
+      ) {
+        // Multi-line display bracket with content already on the first line:
+        // `  [ I = \int f(x) , dx`  ...  `  ]`
+        inBracket = true;
+        bracketBuf = [line.trim().replace(/^\s*\[\s*/, "")];
       } else {
         out.push(line);
       }
     } else {
       if (/^\s*\]\s*$/.test(line)) {
+        flushBracket();
+      } else if (/\]\s*$/.test(line)) {
+        // Content and the closing bracket share the last line.
+        bracketBuf.push(line.replace(/\]\s*$/, ""));
         flushBracket();
       } else {
         bracketBuf.push(line);
@@ -341,8 +390,10 @@ function MarkdownMessageBase({
   content: string;
   sources?: Source[];
 }) {
-  const normalized = separateDisplayMath(
-    hoistInlineMath(normalizeMathDelimiters(content)),
+  const normalized = repairDisplayMath(
+    separateDisplayMath(
+      hoistInlineMath(normalizeMathDelimiters(stripMathArtifacts(content))),
+    ),
   );
 
   const withCitations = sources && sources.length > 0

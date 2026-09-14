@@ -97,6 +97,8 @@ const JARVIS_PROMPT =
   "\n\nMATH & EQUATIONS — Always typeset mathematics in LaTeX for the KaTeX renderer:" +
   "\n- Inline math uses $...$ (e.g. $x^2 + 1$). Display math uses $$...$$ on its own lines." +
   "\n- NEVER use \\(...\\), \\[...\\], or bare [ ... ] delimiters — only $ and $$ work." +
+  "\n- \\frac must ALWAYS have its backslash: write \\frac{a}{b} — the plain word `frac{a}{b}` without \\ renders as raw text." +
+  "\n- Always close every \\begin{...} with its matching \\end{...} on the same math block — an unclosed environment breaks the whole formula." +
   "\n- Use proper commands: \\frac{a}{b}, \\sqrt{x}, \\int, \\sum, \\lim, \\ln, \\log, \\sin, \\cos, \\tan, \\arctan, \\alpha, \\pi, \\approx, \\neq, \\leq, \\geq, \\to, \\cdot, \\times, \\boxed{...}, \\begin{aligned}...\\end{aligned}." +
   "\n- Wrap final results in \\boxed{...}." +
   "\n\nSOLVING MATH PROBLEMS (algebra, calculus, linear regression, statistics, matrices) — give a structured, textbook-style solution:" +
