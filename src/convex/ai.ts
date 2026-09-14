@@ -42,11 +42,19 @@ const JARVIS_PROMPT =
   "\n- Wrap final results in \\boxed{...}." +
   "\n\nSOLVING MATH PROBLEMS (algebra, calculus, linear regression, statistics, matrices) — give a structured, textbook-style solution:" +
   "\n1. State what is asked and the method/technique that applies (e.g. polynomial division, u-substitution, partial fractions)." +
-  "\n2. Solve step by step: number each step with a bold heading, show the working as display math, and explain WHY each move is valid in one sentence." +
+  "\n2. Solve step by step: number each step with a bold heading (e.g. **Step 1 — Polynomial division**), show the working as display math ($$...$$), and explain WHY each move is valid in one sentence." +
   "\n3. Show intermediate quantities exactly (fractions like \\tfrac{7}{32}, not decimals) unless a numeric approximation is required — then use \\approx and keep 4-6 significant figures." +
-  "\n4. Present the final result with \\boxed{} and define any constants introduced (roots, coefficients)." +
+  "\n4. Present the final result with \\boxed{} inside its own $$...$$ block, and define any constants introduced (roots, coefficients)." +
   "\n5. End with 1-3 short bullet Remarks: what technique drove the solution, key checks (e.g. differentiate the antiderivative to verify), and how to adapt for special cases." +
-  "\nWhen integration is involved: simplify/factor first, split the integrand (polynomial part via division, proper fraction via derivative-alignment u = D(x), then partial fractions), and integrate each piece with a stated rule.";
+  "\nWhen integration is involved: simplify/factor first, split the integrand (polynomial part via division, proper fraction via derivative-alignment u = D(x), then partial fractions), and integrate each piece with a stated rule." +
+  "\n\nLATEX LAYOUT RULES (critical for readability):" +
+  "\n- ANY expression containing \\frac, \\sqrt, \\int, \\sum, or more than one operator MUST be display math ($$...$$ on its own line) — NEVER inline." +
+  "\n- Inline $...$ is ONLY for single simple tokens like $x$, $a$, $k = -\\frac{9}{4}$ (one fraction max), $f(x)$, $2x^2 - x + 1$." +
+  "\n- Never chain multiple equals signs with fractions inline (e.g. NEVER write $a = \\frac{21}{96} = \\frac{7}{32}$ inline — put each equation on its own display line)." +
+  "\n- Derivations with consecutive equalities use \\begin{aligned}...\\end{aligned} inside $$...$$, aligning on &= ." +
+  "\n- Use \\dfrac for fractions in display math, \\tfrac for coefficients like \\tfrac{7}{32} attached to symbols." +
+  "\n- Long products/quotients: break across multiple display lines instead of cramming into one — readability over compactness." +
+  "\n- Define every new symbol the moment it appears (e.g. \"where $D(x) = 2x^3 + x^2 + 1$\"), so terms and relationships are never ambiguous.";
 
 /**
  * Build the user message content, optionally including vision content
@@ -657,24 +665,105 @@ export const getCurrencyRate = action({
   },
 });
 
+interface WeatherData {
+  city: string;
+  country: string;
+  temp: number;
+  feelsLike: number;
+  humidity: number;
+  wind: number;
+  description: string;
+  icon: string;
+  high?: number;
+  low?: number;
+  pressure?: number;
+  visibility?: number;
+  sunrise?: string;
+  sunset?: string;
+  provider: string;
+}
+
+/** Map OpenWeatherMap condition ids to emoji. */
+function owmIcon(id: number): string {
+  if (id >= 200 && id < 300) return "⛈️";
+  if (id >= 300 && id < 400) return "🌦️";
+  if (id >= 500 && id < 600) return "🌧️";
+  if (id >= 600 && id < 700) return "❄️";
+  if (id >= 700 && id < 800) return "🌫️";
+  if (id === 800) return "☀️";
+  if (id === 801) return "🌤️";
+  if (id === 802) return "⛅";
+  return "☁️";
+}
+
 export const getWeather = action({
   args: {
     city: v.string(),
   },
-  handler: async (_ctx, args): Promise<{
-    city: string;
-    country: string;
-    temp: number;
-    feelsLike: number;
-    humidity: number;
-    wind: number;
-    description: string;
-    icon: string;
-  }> => {
+  handler: async (_ctx, args): Promise<WeatherData> => {
     const city = args.city.trim();
     if (!city) throw new Error("City name is required.");
 
-    // Use wttr.in (free, no key)
+    // Primary: OpenWeatherMap (if key configured)
+    const owmKey = process.env.OPENWEATHER_API_KEY;
+    if (owmKey) {
+      try {
+        const res = await fetch(
+          `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(city)}&units=metric&appid=${owmKey}`,
+        );
+        if (res.ok) {
+          const d = (await res.json()) as {
+            name?: string;
+            dt?: number;
+            timezone?: number;
+            sys?: { country?: string; sunrise?: number; sunset?: number };
+            main?: {
+              temp?: number;
+              feels_like?: number;
+              humidity?: number;
+              pressure?: number;
+              temp_min?: number;
+              temp_max?: number;
+            };
+            wind?: { speed?: number };
+            weather?: { main?: string; description?: string; id?: number }[];
+            visibility?: number;
+          };
+          const fmt = (ts?: number, tz?: number) => {
+            if (!ts) return undefined;
+            const date = new Date((ts + (tz ?? 0)) * 1000);
+            return date.toLocaleTimeString("en-US", {
+              hour: "2-digit",
+              minute: "2-digit",
+              hour12: false,
+              timeZone: "UTC",
+            });
+          };
+          return {
+            city: d.name ?? city,
+            country: d.sys?.country ?? "",
+            temp: Math.round(d.main?.temp ?? 0),
+            feelsLike: Math.round(d.main?.feels_like ?? 0),
+            humidity: d.main?.humidity ?? 0,
+            wind: Math.round((d.wind?.speed ?? 0) * 3.6),
+            description: d.weather?.[0]?.description ?? "Unknown",
+            icon: owmIcon(d.weather?.[0]?.id ?? 800),
+            high: d.main?.temp_max !== undefined ? Math.round(d.main.temp_max) : undefined,
+            low: d.main?.temp_min !== undefined ? Math.round(d.main.temp_min) : undefined,
+            pressure: d.main?.pressure,
+            visibility: d.visibility !== undefined ? Math.round(d.visibility / 1000) : undefined,
+            sunrise: fmt(d.sys?.sunrise, d.timezone),
+            sunset: fmt(d.sys?.sunset, d.timezone),
+            provider: "openweathermap",
+          };
+        }
+        console.error("OpenWeatherMap failed", res.status, "— falling back to wttr.in");
+      } catch (err) {
+        console.error("OpenWeatherMap error — falling back to wttr.in:", err);
+      }
+    }
+
+    // Fallback: wttr.in (free, no key)
     const res = await fetch(
       `https://wttr.in/${encodeURIComponent(city)}?format=j1`,
       { headers: { Accept: "application/json" } },
@@ -689,6 +778,13 @@ export const getWeather = action({
         windspeedKmph?: string;
         weatherDesc?: { value?: string }[];
         weatherCode?: string;
+        pressure?: string;
+        visibility?: string;
+      }[];
+      weather?: {
+        mintempC?: string;
+        maxtempC?: string;
+        astronomy?: { sunrise?: string; sunset?: string }[];
       }[];
       nearest_area?: {
         areaName?: { value?: string }[];
@@ -725,7 +821,58 @@ export const getWeather = action({
       wind: parseInt(current.windspeedKmph ?? "0"),
       description: current.weatherDesc?.[0]?.value ?? "Unknown",
       icon: iconMap[code] ?? "🌤️",
+      high: data.weather?.[0]?.maxtempC !== undefined ? parseInt(data.weather[0].maxtempC) : undefined,
+      low: data.weather?.[0]?.mintempC !== undefined ? parseInt(data.weather[0].mintempC) : undefined,
+      pressure: current.pressure !== undefined ? parseInt(current.pressure) : undefined,
+      visibility: current.visibility !== undefined ? parseInt(current.visibility) : undefined,
+      sunrise: data.weather?.[0]?.astronomy?.[0]?.sunrise,
+      sunset: data.weather?.[0]?.astronomy?.[0]?.sunset,
+      provider: "wttr.in",
     };
+  },
+});
+
+/**
+ * Natural-language weather: detect weather intent and extract the city from
+ * phrases like "what's the weather in Tokyo" or "is it raining in Mumbai?".
+ * Lets the AI-router answer plain weather questions with live data directly.
+ */
+export const detectWeatherQuery = action({
+  args: { message: v.string() },
+  handler: async (
+    _ctx,
+    args,
+  ): Promise<{ isWeather: boolean; city: string | null }> => {
+    const msg = args.message.trim();
+    if (msg.length > 200) return { isWeather: false, city: null };
+
+    const lower = msg.toLowerCase();
+    const hasWeatherWord =
+      /\bweather\b|\btemperature\b|\bforecast\b|\bhow (hot|cold|warm|humid)\b|\brain(ing)?\b|\bsnow(ing)?\b/.test(
+        lower,
+      );
+    if (!hasWeatherWord) return { isWeather: false, city: null };
+
+    // Extraction patterns — most specific first
+    const patterns = [
+      /(?:weather|temperature|forecast)\s*(?:in|at|for|of|near)\s+([a-zA-Z\s,'().-]{2,60})/i,
+      /\bhow\s+(?:hot|cold|warm|humid)\s+is\s+it\s+(?:in|at)\s+([a-zA-Z\s,'().-]{2,60})/i,
+      /\bis\s+it\s+(?:raining|snowing)\s+in\s+([a-zA-Z\s,'().-]{2,60})/i,
+      /(?:in|at)\s+([a-zA-Z\s,'().-]{2,60})\s+(?:today|tomorrow|tonight|now|right now|currently)/i,
+    ];
+
+    for (const p of patterns) {
+      const m = msg.match(p);
+      if (m?.[1]) {
+        const city = m[1]
+          .replace(/\b(?:today|tomorrow|tonight|now|currently|please)\b/gi, "")
+          .replace(/[?.!,]+$/, "")
+          .trim();
+        if (city.length >= 2) return { isWeather: true, city };
+      }
+    }
+
+    return { isWeather: true, city: null };
   },
 });
 

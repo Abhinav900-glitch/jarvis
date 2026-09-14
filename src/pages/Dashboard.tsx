@@ -369,6 +369,7 @@ export default function Dashboard() {
   const getWorldTimeAction = useAction(api.ai.getWorldTime);
   const getCurrencyRateAction = useAction(api.ai.getCurrencyRate);
   const getWeatherAction = useAction(api.ai.getWeather);
+  const detectWeatherAction = useAction(api.ai.detectWeatherQuery);
   const getCountryInfoAction = useAction(api.ai.getCountryInfo);
   const getOAuthStartUrlAction = useAction(api.cloudinary.getOAuthStartUrl);
   const disconnectCloudinaryAction = useAction(api.cloudinary.disconnectCloudinary);
@@ -701,6 +702,71 @@ export default function Dashboard() {
     inputRef.current?.focus();
   };
 
+  // ---- Natural-language weather: store user msg, fetch data, AI narrates ----
+  const runWeatherReply = async (city: string, originalText: string) => {
+    setSending(true);
+    setAssistantError(null);
+    setPanelNlp(null);
+    setPanelNews(null);
+    setPanelVoice(null);
+    if (recorder.recording) recorder.stop();
+    setInput("");
+
+    try {
+      let sessionId: Id<"chatSessions">;
+      let history: { role: string; content: string }[] = [];
+      if (!activeId) {
+        const { sessionId: sid } = await startWithMessage({ content: originalText });
+        sessionId = sid;
+        setActiveId(sid);
+      } else {
+        sessionId = activeId;
+        await appendMessage({ sessionId, role: "user", content: originalText });
+        history = (messages ?? []).slice(-12).map((m) => ({
+          role: m.role,
+          content: m.content,
+        }));
+      }
+
+      const w = await getWeatherAction({ city });
+
+      const narration = await askAction({
+        prompt:
+          `The user asked: "${originalText}"\n\n` +
+          `Live weather data for ${w.city}${w.country ? ", " + w.country : ""} (via ${w.provider}):\n` +
+          `- Condition: ${w.description} ${w.icon}\n- Temperature: ${w.temp}°C (feels like ${w.feelsLike}°C)\n` +
+          (w.high !== undefined && w.low !== undefined ? `- Today's range: ${w.low}°C to ${w.high}°C\n` : "") +
+          `- Humidity: ${w.humidity}%\n- Wind: ${w.wind} km/h\n` +
+          (w.pressure !== undefined ? `- Pressure: ${w.pressure} hPa\n` : "") +
+          (w.visibility !== undefined ? `- Visibility: ${w.visibility} km\n` : "") +
+          (w.sunrise ? `- Sunrise: ${w.sunrise}, Sunset: ${w.sunset}\n` : "") +
+          `\nAnswer the user's question naturally in 2-4 short sentences using this data. ` +
+          `Include the temperature and condition. Add one practical suggestion (umbrella, jacket, etc.) if relevant. ` +
+          `Do NOT mention slash commands, APIs, or that you were given structured data.`,
+        history,
+      });
+
+      await appendMessage({
+        sessionId,
+        role: "assistant",
+        content: narration.text,
+        model: narration.model,
+        usedFallback: narration.usedFallback,
+        usedSearch: false,
+      });
+
+      // Also show the visual weather card
+      setRegionResult({ type: "weather", ...w } as Record<string, unknown>);
+    } catch (err) {
+      setAssistantError(
+        err instanceof Error ? err.message : "Weather lookup failed.",
+      );
+    } finally {
+      setSending(false);
+      inputRef.current?.focus();
+    }
+  };
+
   const runSend = async () => {
     const text = input.trim();
     if ((!text && pendingImages.length === 0 && !pendingFile) || sending)
@@ -711,6 +777,27 @@ export default function Dashboard() {
       setInput("");
       await handlePdfQuestion(text);
       return;
+    }
+
+    // Natural-language weather: fetch live data directly, no slash command needed
+    if (!editingId && text && pendingImages.length === 0 && !pendingFile) {
+      try {
+        const detection = await detectWeatherAction({ message: text });
+        if (detection.isWeather && detection.city) {
+          await runWeatherReply(detection.city, text);
+          return;
+        }
+        if (detection.isWeather && !detection.city) {
+          // Weather asked but no city parsed — use detected timezone city guess
+          const guess = regionTimezone.split("/").pop()?.replace(/_/g, " ") ?? "";
+          if (guess) {
+            await runWeatherReply(guess, text);
+            return;
+          }
+        }
+      } catch {
+        // detection is best-effort — fall through to normal AI chat
+      }
     }
 
     setSending(true);
