@@ -341,9 +341,57 @@ async function generateViaCloudinary(
 }
 
 /**
- * Provider 2 — Hugging Face Inference API (FLUX.1-schnell, non-gated).
- * Returns raw PNG bytes, which we store on Cloudinary for a persistent URL.
+ * Provider 2 — Hugging Face Inference API.
+ * Primary model: stabilityai/sdxl-turbo (1-step distilled SDXL — the serverless
+ * equivalent of diffusers' DiffusionPipeline("stabilityai/sdxl-turbo")).
+ * Fallback model: black-forest-labs/FLUX.1-schnell (4-step).
+ * Returns raw image bytes, stored on Cloudinary for a persistent URL.
  */
+async function hfImageRequest(
+  token: string,
+  model: string,
+  prompt: string,
+  steps: number,
+  guidance: number,
+): Promise<ArrayBuffer> {
+  const res = await fetch(
+    `https://api-inference.huggingface.co/models/${model}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        Accept: "image/png",
+      },
+      body: JSON.stringify({
+        inputs: prompt,
+        parameters: {
+          num_inference_steps: steps,
+          guidance_scale: guidance,
+        },
+      }),
+      signal: AbortSignal.timeout(120_000),
+    },
+  );
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    console.error(`HF image error [${model}]`, res.status, errText.slice(0, 300));
+    throw new Error(`${model} failed (${res.status})`);
+  }
+
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.startsWith("image/")) {
+    throw new Error(`${model} returned a non-image response.`);
+  }
+
+  const bytes = await res.arrayBuffer();
+  if (bytes.byteLength < 1000) {
+    throw new Error(`${model} returned an empty image.`);
+  }
+  return bytes;
+}
+
 async function generateViaHuggingFace(
   ctx: ActionCtx,
   prompt: string,
@@ -353,48 +401,43 @@ async function generateViaHuggingFace(
     throw new Error("HUGGING_FACE_TOKEN is not configured.");
   }
 
-  const model = "black-forest-labs/FLUX.1-schnell";
-  const res = await fetch(
-    `https://api-inference.huggingface.co/models/${model}`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        inputs: prompt,
-        parameters: { num_inference_steps: 4, guidance_scale: 0.0 },
-      }),
-    },
-  );
+  // SDXL-Turbo is distilled for 1-4 step generation with low guidance
+  const attempts: { model: string; steps: number; guidance: number }[] = [
+    { model: "stabilityai/sdxl-turbo", steps: 1, guidance: 0.0 },
+    { model: "stabilityai/sdxl-turbo", steps: 4, guidance: 0.0 },
+    { model: "black-forest-labs/FLUX.1-schnell", steps: 4, guidance: 0.0 },
+  ];
 
-  if (!res.ok) {
-    const errText = await res.text().catch(() => "");
-    console.error("Hugging Face image error", res.status, errText.slice(0, 300));
-    throw new Error(`Hugging Face generation failed (${res.status})`);
+  const failures: string[] = [];
+  for (const a of attempts) {
+    try {
+      const bytes = await hfImageRequest(
+        token,
+        a.model,
+        prompt,
+        a.steps,
+        a.guidance,
+      );
+      const publicId = `jarvis-gen/hf-${Date.now()}`;
+      try {
+        const stored = await uploadBytesToCloudinary(ctx, bytes, publicId);
+        return {
+          url: stored.url,
+          publicId: stored.publicId,
+          provider: `hf/${a.model.split("/")[1]}`,
+        };
+      } catch {
+        // Cloudinary upload failed — data URL so the client still shows the image
+        const base64 = Buffer.from(bytes).toString("base64");
+        const dataUrl = `data:image/png;base64,${base64}`;
+        return { url: dataUrl, publicId, provider: `hf/${a.model.split("/")[1]}` };
+      }
+    } catch (err) {
+      failures.push(err instanceof Error ? err.message : "failed");
+    }
   }
 
-  const contentType = res.headers.get("content-type") ?? "";
-  if (!contentType.startsWith("image/")) {
-    throw new Error("Hugging Face returned a non-image response.");
-  }
-
-  const bytes = await res.arrayBuffer();
-  if (bytes.byteLength < 1000) {
-    throw new Error("Hugging Face returned an empty image.");
-  }
-
-  const publicId = `jarvis-gen/hf-${Date.now()}`;
-  try {
-    const stored = await uploadBytesToCloudinary(ctx, bytes, publicId);
-    return { url: stored.url, publicId: stored.publicId, provider: "huggingface" };
-  } catch {
-    // If Cloudinary upload fails, return a data URL so the client can still display it
-    const base64 = Buffer.from(bytes).toString("base64");
-    const dataUrl = `data:image/png;base64,${base64}`;
-    return { url: dataUrl, publicId, provider: "huggingface" };
-  }
+  throw new Error(`Hugging Face failed: ${failures.join(" | ")}`);
 }
 
 /**

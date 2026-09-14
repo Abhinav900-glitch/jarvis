@@ -560,10 +560,7 @@ export default function Dashboard() {
   };
 
   // ---- AI image generation: Cloudinary → Hugging Face → Pollinations ----
-  const handleGenerateImage = async () => {
-    const prompt = input.trim();
-    if (!prompt || generating) return;
-
+  const generateImageWithPrompt = async (prompt: string) => {
     setGenerating(true);
     setAssistantError(null);
     try {
@@ -574,7 +571,6 @@ export default function Dashboard() {
         ...prev,
         { url, publicId, provider },
       ]);
-      setInput("");
       inputRef.current?.focus();
     } catch (err) {
       setAssistantError(
@@ -583,6 +579,23 @@ export default function Dashboard() {
     } finally {
       setGenerating(false);
     }
+  };
+
+  const handleGenerateImage = async () => {
+    const prompt = input.trim();
+    if (!prompt || generating) return;
+    setInput("");
+    await generateImageWithPrompt(prompt);
+  };
+
+  // /image <prompt> — generate AND send as a message in one step
+  const handleGenerateImageWithText = async (prompt: string) => {
+    if (!prompt.trim() || generating) return;
+    await generateImageWithPrompt(prompt);
+    // Once attached, auto-send with the prompt as caption
+    setTimeout(() => {
+      void runSendWithText(prompt);
+    }, 100);
   };
 
   const [voiceOutput, setVoiceOutput] = useState(() => {
@@ -1390,6 +1403,14 @@ export default function Dashboard() {
         }, 50);
         return;
       }
+      // /image — generate directly from the message bar
+      const imageMatch = text.match(/^\/(image|img|draw)\s+([\s\S]+)/i);
+      if (imageMatch) {
+        const [, , prompt] = imageMatch;
+        setInput("");
+        void handleGenerateImageWithText(prompt);
+        return;
+      }
       void runSend();
     }
   };
@@ -1778,7 +1799,7 @@ export default function Dashboard() {
               )}
             </div>
             <div className="hidden items-center gap-3 sm:flex">
-              <span className="cursor-default" title="/time, /weather, /currency, /country, /solve <problem>">
+              <span className="cursor-default" title="/time, /weather, /currency, /country, /solve <problem>, /image <prompt>">
                 Commands: <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">/time</code>{" "}
                 <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">/weather</code>{" "}
                 <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">/currency</code>{" "}
@@ -1831,6 +1852,7 @@ export default function Dashboard() {
                     { label: "💱 Currency", cmd: "/currency 100 USD to EUR" },
                     { label: "🌍 Country", cmd: "/country Japan" },
                     { label: "🧮 Solve math", cmd: "/solve " },
+                    { label: "🎨 Generate image", cmd: "/image " },
                   ].map((item) => (
                     <button
                       key={item.cmd}
@@ -2392,7 +2414,7 @@ export default function Dashboard() {
                     <button
                       onClick={() => void handleGenerateImage()}
                       disabled={generating || !input.trim()}
-                      title="Generate image with AI (uses your message as prompt)"
+                      title="Generate image with AI (uses your message as prompt — or type /image <prompt>)"
                       className="inline-flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
                     >
                       {generating ? (
