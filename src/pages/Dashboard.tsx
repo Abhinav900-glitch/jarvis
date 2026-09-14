@@ -1060,6 +1060,20 @@ export default function Dashboard() {
         void handleRegionCommand(cmd.toLowerCase(), arg.trim());
         return;
       }
+      // /solve — structured step-by-step math solution
+      const solveMatch = text.match(/^\/(solve|math)\s+([\s\S]+)/i);
+      if (solveMatch) {
+        const [, , problem] = solveMatch;
+        setInput(
+          `Solve this step by step using proper LaTeX math notation ($ inline, $$ display, \\boxed for the final result). Show your method, every step with working, and end with brief Remarks: ${problem}`,
+        );
+        // Small delay so the state lands, then trigger send
+        setTimeout(() => {
+          const btn = document.querySelector<HTMLButtonElement>("[data-send-button]");
+          btn?.click();
+        }, 50);
+        return;
+      }
       void runSend();
     }
   };
@@ -1436,7 +1450,7 @@ export default function Dashboard() {
               )}
             </div>
             <div className="hidden items-center gap-3 sm:flex">
-              <span className="cursor-default" title="/time, /weather, /currency, /country">
+              <span className="cursor-default" title="/time, /weather, /currency, /country, /solve <problem>">
                 Commands: <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">/time</code>{" "}
                 <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">/weather</code>{" "}
                 <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">/currency</code>{" "}
@@ -1497,6 +1511,7 @@ export default function Dashboard() {
                     { label: "🌤 Weather", cmd: "/weather London" },
                     { label: "💱 Currency", cmd: "/currency 100 USD to EUR" },
                     { label: "🌍 Country", cmd: "/country Japan" },
+                    { label: "🧮 Solve math", cmd: "/solve " },
                   ].map((item) => (
                     <button
                       key={item.cmd}
@@ -2029,6 +2044,7 @@ export default function Dashboard() {
                   <Button
                     size="icon-sm"
                     onClick={() => void runSend()}
+                    data-send-button
                     disabled={(!input.trim() && pendingImages.length === 0 && !pendingFile) || sending}
                     className="size-7 rounded-lg"
                   >

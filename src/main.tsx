@@ -7,6 +7,7 @@ import { ConvexReactClient } from "convex/react";
 import React, { StrictMode, useEffect, lazy, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Route, Routes, useLocation } from "react-router";
+import "katex/dist/katex.min.css";
 import "./index.css";
 
 // Lazy load route components for better code splitting

@@ -2,7 +2,9 @@ import { Check, Copy } from "lucide-react";
 import { memo, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
+import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 
 // ---------------------------------------------------------------------------
 // Source type (mirror of convex/ai.ts)
@@ -31,15 +33,81 @@ function extractText(node: unknown): string {
 }
 
 /**
- * Turn literal [1]-style citations into real markdown links so the custom
- * anchor renderer can display them as source chips.
+ * Normalize AI-style LaTeX delimiters to remark-math's `$...$` / `$$...$$`.
+ * Handles:
+ *  - `\[ ... \]` display (OpenAI convention)
+ *  - `\( ... \)` inline (OpenAI convention)
+ *  - `[ ... ]` standalone display lines (bracket convention)
  */
-function withCitationLinks(content: string, sources?: Source[]): string {
-  if (!sources || sources.length === 0) return content;
-  return content.replace(/\[(\d+)\](?!\()/g, (match, n: string) => {
-    const src = sources[parseInt(n, 10) - 1];
-    return src ? `[${n}](${src.url})` : match;
+function normalizeMathDelimiters(input: string): string {
+  let text = input;
+
+  // OpenAI-style display: \[ ... \]  ->  $$ ... $$
+  text = text.replace(/\\\[([\s\S]*?)\\\]/g, (_m: string, tex: string) => {
+    return "\n\n$$" + tex.trim() + "$$\n\n";
   });
+
+  // OpenAI-style inline: \( ... \)  ->  $ ... $
+  text = text.replace(/\\\(([\s\S]*?)\\\)/g, (_m: string, tex: string) => {
+    return "$" + tex.trim() + "$";
+  });
+
+  // Standalone bracketed display: a line that is only [ ... ] containing
+  // LaTeX-ish content (backslash commands, ^, _, {, }). Skips markdown links.
+  const lines = text.split("\n");
+  const out: string[] = [];
+  let inBracket = false;
+  let bracketBuf: string[] = [];
+
+  const flushBracket = () => {
+    if (bracketBuf.length > 0) {
+      const inner = bracketBuf.join("\n").trim();
+      const latexish =
+        /\\[a-zA-Z]+/.test(inner) || /[_^{}]/.test(inner) || /\bfrac\b/.test(inner);
+      const isLink = /^\[.*\]\(.*\)$/.test(inner);
+      if (inner && latexish && !isLink) {
+        out.push("");
+        out.push("$$" + inner + "$$");
+        out.push("");
+      } else {
+        out.push("[" + bracketBuf.join("\n"));
+      }
+      bracketBuf = [];
+    }
+    inBracket = false;
+  };
+
+  for (const line of lines) {
+    if (!inBracket) {
+      if (/^\s*\[\s*$/.test(line)) {
+        inBracket = true;
+        bracketBuf = [];
+      } else if (/^\s*\[([\s\S]+)\]\s*$/.test(line) && !/^\s*\[.*\]\(.*\)\s*$/.test(line)) {
+        // Single-line [ ... ] bracket display
+        const inner = line.trim().slice(1, -1).trim();
+        const latexish =
+          /\\[a-zA-Z]+/.test(inner) || /[_^{}]/.test(inner) || /\bfrac\b/.test(inner);
+        if (inner && latexish) {
+          out.push("");
+          out.push("$$" + inner + "$$");
+          out.push("");
+        } else {
+          out.push(line);
+        }
+      } else {
+        out.push(line);
+      }
+    } else {
+      if (/^\s*\]\s*$/.test(line)) {
+        flushBracket();
+      } else {
+        bracketBuf.push(line);
+      }
+    }
+  }
+  flushBracket();
+
+  return out.join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -65,7 +133,7 @@ function CodeBlock({ children }: { children?: React.ReactNode }) {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1600);
     } catch {
-      // Clipboard unavailable — do nothing.
+      // Clipboard unavailable — ignore.
     }
   };
 
@@ -96,11 +164,10 @@ function CodeBlock({ children }: { children?: React.ReactNode }) {
 }
 
 // ---------------------------------------------------------------------------
-// Markdown renderer
+// Markdown renderer components
 // ---------------------------------------------------------------------------
 
 const components: Components = {
-  // Citations become superscript chips; regular links stay minimal.
   a: ({ href, children }) => {
     const text = extractText(children).trim();
     if (href && /^\d+$/.test(text)) {
@@ -127,16 +194,12 @@ const components: Components = {
     );
   },
   pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
-  // Highlighted blocks carry an `hljs` class from rehype-highlight; inline
-  // code does not, so it gets the subtle chip treatment instead.
   code: ({ className, children }) => {
     const isBlock =
       typeof className === "string" &&
       (className.includes("hljs") || className.includes("language-"));
     if (isBlock) {
-      return (
-        <code className={className}>{children}</code>
-      );
+      return <code className={className}>{children}</code>;
     }
     return (
       <code className="rounded-sm border bg-muted/60 px-1 py-0.5 text-[0.85em] font-medium">
@@ -146,6 +209,10 @@ const components: Components = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// Markdown renderer
+// ---------------------------------------------------------------------------
+
 function MarkdownMessageBase({
   content,
   sources,
@@ -153,14 +220,26 @@ function MarkdownMessageBase({
   content: string;
   sources?: Source[];
 }) {
+  const normalized = normalizeMathDelimiters(content);
+
+  const withCitations = sources && sources.length > 0
+    ? normalized.replace(/\[(\d+)\](?!\()/g, (match: string, n: string) => {
+        const src = sources[parseInt(n, 10) - 1];
+        return src ? `[${n}](${src.url})` : match;
+      })
+    : normalized;
+
   return (
     <div className="md-body">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeHighlight]}
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[
+          rehypeHighlight,
+          [rehypeKatex, { throwOnError: false, strict: false, output: "html" }],
+        ]}
         components={components}
       >
-        {withCitationLinks(content, sources)}
+        {withCitations}
       </ReactMarkdown>
     </div>
   );

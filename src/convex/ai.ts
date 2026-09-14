@@ -34,7 +34,19 @@ const JARVIS_PROMPT =
   "Format every response in GitHub-flavored Markdown: use **bold** for key terms, bullet lists for enumerations, " +
   "tables for comparisons, and fenced code blocks with a language tag (```python, ```ts, ...) for any code. " +
   "When research material from web search results is provided in the user message, ground your answer in that material and cite sources inline as [n]." +
-  "If the user message includes an image, describe and analyze the image in detail before answering the question.";
+  "If the user message includes an image, describe and analyze the image in detail before answering the question." +
+  "\n\nMATH & EQUATIONS — Always typeset mathematics in LaTeX for the KaTeX renderer:" +
+  "\n- Inline math uses $...$ (e.g. $x^2 + 1$). Display math uses $$...$$ on its own lines." +
+  "\n- NEVER use \\(...\\), \\[...\\], or bare [ ... ] delimiters — only $ and $$ work." +
+  "\n- Use proper commands: \\frac{a}{b}, \\sqrt{x}, \\int, \\sum, \\lim, \\ln, \\log, \\sin, \\cos, \\tan, \\arctan, \\alpha, \\pi, \\approx, \\neq, \\leq, \\geq, \\to, \\cdot, \\times, \\boxed{...}, \\begin{aligned}...\\end{aligned}." +
+  "\n- Wrap final results in \\boxed{...}." +
+  "\n\nSOLVING MATH PROBLEMS (algebra, calculus, linear regression, statistics, matrices) — give a structured, textbook-style solution:" +
+  "\n1. State what is asked and the method/technique that applies (e.g. polynomial division, u-substitution, partial fractions)." +
+  "\n2. Solve step by step: number each step with a bold heading, show the working as display math, and explain WHY each move is valid in one sentence." +
+  "\n3. Show intermediate quantities exactly (fractions like \\tfrac{7}{32}, not decimals) unless a numeric approximation is required — then use \\approx and keep 4-6 significant figures." +
+  "\n4. Present the final result with \\boxed{} and define any constants introduced (roots, coefficients)." +
+  "\n5. End with 1-3 short bullet Remarks: what technique drove the solution, key checks (e.g. differentiate the antiderivative to verify), and how to adapt for special cases." +
+  "\nWhen integration is involved: simplify/factor first, split the integrand (polynomial part via division, proper fraction via derivative-alignment u = D(x), then partial fractions), and integrate each piece with a stated rule.";
 
 /**
  * Build the user message content, optionally including vision content
