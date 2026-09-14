@@ -355,7 +355,9 @@ export const deepResearch = action({
           organic_results?: { title?: string; url?: string; snippet?: string; domain?: string }[];
         };
         if (data.error) {
-          searchErrors.push(`serpstack: ${data.error.info ?? "search failed"}`);
+          const msg = data.error.info ?? "search failed";
+          console.error("[deep-research] serpstack error:", msg);
+          searchErrors.push(`serpstack: ${msg}`);
         } else {
           sources = (data.organic_results ?? [])
             .slice(0, 8)
@@ -365,9 +367,12 @@ export const deepResearch = action({
               domain: r.domain,
             }))
             .filter((s) => s.url);
+          console.log(`[deep-research] serpstack returned ${sources.length} results`);
         }
       } catch (err) {
-        searchErrors.push(`serpstack: ${err instanceof Error ? err.message : "failed"}`);
+        const msg = err instanceof Error ? err.message : "failed";
+        console.error("[deep-research] serpstack exception:", msg);
+        searchErrors.push(`serpstack: ${msg}`);
       }
     } else {
       searchErrors.push("serpstack: SERPSTACK_API_KEY not configured");
@@ -379,8 +384,11 @@ export const deepResearch = action({
       if (serpApiKey) {
         try {
           sources = await serpApiSearch(serpApiKey, args.query);
+          console.log(`[deep-research] serpapi fallback returned ${sources.length} results`);
         } catch (err) {
-          searchErrors.push(`serpapi: ${err instanceof Error ? err.message : "failed"}`);
+          const msg = err instanceof Error ? err.message : "failed";
+          console.error("[deep-research] serpapi exception:", msg);
+          searchErrors.push(`serpapi: ${msg}`);
         }
       } else {
         searchErrors.push("serpapi: SERPAPI_API_KEY not configured");
@@ -442,7 +450,7 @@ export const deepResearch = action({
     }
 
     throw new Error(
-      `All models failed automatically. ${failures.join(" · ")}`,
+      `Search succeeded (${sources.length} sources) but all AI models failed: ${failures.join(" · ")}`,
     );
   },
 });
@@ -455,18 +463,18 @@ async function serpApiSearch(key: string, query: string): Promise<Source[]> {
   const url =
     `https://serpapi.com/search.json?engine=google` +
     `&q=${encodeURIComponent(query)}&num=10&api_key=${encodeURIComponent(key)}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`(${res.status}) ${text.slice(0, 120)}`);
+    throw new Error(`serpapi.com ${res.status}: ${text.slice(0, 120)}`);
   }
   const data = (await res.json()) as {
     error?: string;
     organic_results?: { title?: string; link?: string; snippet?: string; displayed_link?: string }[];
   };
-  if (data.error) throw new Error(data.error);
+  if (data.error) throw new Error(`serpapi: ${data.error}`);
 
-  return (data.organic_results ?? [])
+  const results = (data.organic_results ?? [])
     .slice(0, 8)
     .map((r) => ({
       title: r.title ?? "Untitled result",
@@ -474,23 +482,32 @@ async function serpApiSearch(key: string, query: string): Promise<Source[]> {
       domain: r.displayed_link,
     }))
     .filter((s) => s.url);
+
+  if (results.length === 0) {
+    throw new Error("serpapi: no organic results returned");
+  }
+  return results;
 }
 
 // serpstack free plans restrict HTTPS — retry over http when https is refused.
 async function serpstackSearch(key: string, query: string): Promise<unknown> {
   const qs = `access_key=${encodeURIComponent(key)}&type=web&num=10&query=${encodeURIComponent(query)}`;
-  let first: Response | null = null;
+  let firstStatus: number | string = "network error";
   try {
-    const res = await fetch(`https://api.serpstack.com/search?${qs}`);
+    const res = await fetch(`https://api.serpstack.com/search?${qs}`, {
+      signal: AbortSignal.timeout(10_000),
+    });
     if (res.ok) return await res.json();
-    first = res;
+    firstStatus = res.status;
   } catch {
     // fall through to http
   }
-  const res2 = await fetch(`http://api.serpstack.com/search?${qs}`);
+  const res2 = await fetch(`http://api.serpstack.com/search?${qs}`, {
+    signal: AbortSignal.timeout(10_000),
+  });
   if (!res2.ok) {
     throw new Error(
-      `serpstack request failed (https: ${first?.status ?? "network error"}, http: ${res2.status})`,
+      `request failed (https: ${firstStatus}, http: ${res2.status})`,
     );
   }
   return res2.json();
