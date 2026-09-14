@@ -259,34 +259,54 @@ export const deepResearch = action({
       throw new Error("Sign in to use Deep Research.");
     }
 
-    // 1) Search the live web via serpstack.
+    // 1) Search the live web: serpstack primary → SerApi fallback.
+    const searchErrors: string[] = [];
+    let sources: Source[] = [];
+
     const serpstackKey = process.env.SERPSTACK_API_KEY;
-    if (!serpstackKey) {
-      throw new Error("SERPSTACK_API_KEY is not configured.");
+    if (serpstackKey) {
+      try {
+        const data = (await serpstackSearch(serpstackKey, args.query)) as {
+          error?: { info?: string };
+          organic_results?: { title?: string; url?: string; snippet?: string; domain?: string }[];
+        };
+        if (data.error) {
+          searchErrors.push(`serpstack: ${data.error.info ?? "search failed"}`);
+        } else {
+          sources = (data.organic_results ?? [])
+            .slice(0, 8)
+            .map((r) => ({
+              title: r.title ?? "Untitled result",
+              url: r.url ?? "",
+              domain: r.domain,
+            }))
+            .filter((s) => s.url);
+        }
+      } catch (err) {
+        searchErrors.push(`serpstack: ${err instanceof Error ? err.message : "failed"}`);
+      }
+    } else {
+      searchErrors.push("serpstack: SERPSTACK_API_KEY not configured");
     }
 
-    const data = await serpstackSearch(
-      serpstackKey,
-      args.query,
-    ) as {
-      error?: { info?: string };
-      organic_results?: { title?: string; url?: string; snippet?: string; domain?: string }[];
-    };
-    if (data.error) {
-      throw new Error(`serpstack: ${data.error.info ?? "search failed"}`);
+    // Fallback: SerApi (serpapi.com) Google results
+    if (sources.length === 0) {
+      const serpApiKey = process.env.SERPAPI_API_KEY;
+      if (serpApiKey) {
+        try {
+          sources = await serpApiSearch(serpApiKey, args.query);
+        } catch (err) {
+          searchErrors.push(`serpapi: ${err instanceof Error ? err.message : "failed"}`);
+        }
+      } else {
+        searchErrors.push("serpapi: SERPAPI_API_KEY not configured");
+      }
     }
-
-    const sources: Source[] = (data.organic_results ?? [])
-      .slice(0, 8)
-      .map((r) => ({
-        title: r.title ?? "Untitled result",
-        url: r.url ?? "",
-        domain: r.domain,
-      }))
-      .filter((s) => s.url);
 
     if (sources.length === 0) {
-      throw new Error("No search results found for this query.");
+      throw new Error(
+        `All search providers failed. ${searchErrors.join(" · ")}`,
+      );
     }
 
     const context = sources
@@ -342,6 +362,35 @@ export const deepResearch = action({
     );
   },
 });
+
+/**
+ * SerApi (serpapi.com) Google search fallback.
+ * Returns organic results normalized to the same Source shape as serpstack.
+ */
+async function serpApiSearch(key: string, query: string): Promise<Source[]> {
+  const url =
+    `https://serpapi.com/search.json?engine=google` +
+    `&q=${encodeURIComponent(query)}&num=10&api_key=${encodeURIComponent(key)}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`(${res.status}) ${text.slice(0, 120)}`);
+  }
+  const data = (await res.json()) as {
+    error?: string;
+    organic_results?: { title?: string; link?: string; snippet?: string; displayed_link?: string }[];
+  };
+  if (data.error) throw new Error(data.error);
+
+  return (data.organic_results ?? [])
+    .slice(0, 8)
+    .map((r) => ({
+      title: r.title ?? "Untitled result",
+      url: r.link ?? "",
+      domain: r.displayed_link,
+    }))
+    .filter((s) => s.url);
+}
 
 // serpstack free plans restrict HTTPS — retry over http when https is refused.
 async function serpstackSearch(key: string, query: string): Promise<unknown> {
