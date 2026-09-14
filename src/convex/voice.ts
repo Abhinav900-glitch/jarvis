@@ -149,8 +149,9 @@ export const transcribe = action({
 // Groq PlayAI TTS — Jarvis speaks back (uses the existing GROQ_API_KEY)
 // ---------------------------------------------------------------------------
 
+// Groq PlayAI TTS. Voices are passed to the API as "<Name> — PlayAI".
 const TTS_VOICES = [
-  "Jessica",
+  "Celeste",
   "River",
   "Leo",
   "Mia",
@@ -160,7 +161,7 @@ const TTS_VOICES = [
   "Ethan",
 ] as const;
 
-const TTS_MODEL = "canopylabs/orpheus-v1-english";
+const TTS_FALLBACK_VOICE = "Celeste";
 
 /** Speak text aloud with Groq PlayAI TTS. Returns WAV audio bytes. */
 export const speak = action({
@@ -174,7 +175,7 @@ export const speak = action({
 
     const voice = TTS_VOICES.includes((args.voice ?? "") as never)
       ? (args.voice as string)
-      : "Jessica";
+      : TTS_FALLBACK_VOICE;
 
     // PlayAI TTS caps input at 10K characters.
     const text = args.text.trim().slice(0, 10_000);
@@ -187,10 +188,10 @@ export const speak = action({
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: TTS_MODEL,
+        model: "playai-tts",
         input: text,
-        voice: voice,
-        response_format: "mp3",
+        voice: `${voice} — PlayAI`,
+        response_format: "wav",
       }),
     });
 

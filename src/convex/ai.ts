@@ -3,6 +3,7 @@
 import { v } from "convex/values";
 import { action } from "./_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { api } from "./_generated/api";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -252,8 +253,8 @@ export const ask = action({
     ),
     imageUrls: v.optional(v.array(v.string())),
   },
-  handler: async (_ctx, args): Promise<LlmResult> => {
-    const userId = await getAuthUserId(_ctx);
+  handler: async (ctx, args): Promise<LlmResult> => {
+    const userId = await getAuthUserId(ctx);
     if (userId === null) {
       throw new Error("Sign in to talk to Jarvis.");
     }
@@ -262,10 +263,35 @@ export const ask = action({
       .slice(-12)
       .map((t) => ({ role: t.role as ChatTurn["role"], content: t.content }));
 
+    // RAG: retrieve semantically relevant memories from past conversations
+    let ragContext = "";
+    try {
+      const memories = await ctx.runAction(api.rag.retrieveContext, {
+        query: args.prompt,
+        limit: 4,
+      });
+      if (memories.length > 0) {
+        ragContext =
+          "\n\nRelevant context from the user's past conversations (use if helpful, don't mention where it came from):\n" +
+          memories
+            .map(
+              (m: { role: string; content: string }) =>
+                `- ${m.role === "user" ? "User" : "You"}: ${m.content}`,
+            )
+            .join("\n");
+      }
+    } catch {
+      // RAG is best-effort
+    }
+
     const groqKey = process.env.GROQ_API_KEY;
     const hfToken = process.env.HUGGING_FACE_TOKEN;
 
-    const userContent = buildUserContent(args.prompt, args.imageUrls);
+    // Prepend RAG context to the text prompt when available
+    const effectivePrompt = ragContext
+      ? `${args.prompt}\n\n---${ragContext}`
+      : args.prompt;
+    const userContent = buildUserContent(effectivePrompt, args.imageUrls);
 
     const failures: string[] = [];
 

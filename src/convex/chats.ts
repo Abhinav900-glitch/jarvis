@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { Id } from "./_generated/dataModel";
 
@@ -381,5 +381,47 @@ export const deletePrompt = mutation({
     if (!prompt || prompt.userId !== userId) throw new Error("Prompt not found.");
 
     await ctx.db.delete(args.promptId);
+  },
+});
+
+// ---------------------------------------------------------------------------
+// RAG embedding storage (internal — called from rag.ts actions)
+// ---------------------------------------------------------------------------
+
+/** Hydrate one embedding document (vectorSearch returns ids only). */
+export const getEmbedding = internalQuery({
+  args: { id: v.id("messageEmbeddings") },
+  handler: async (ctx, args) => {
+    return (await ctx.db.get(args.id)) ?? null;
+  },
+});
+
+export const insertEmbedding = internalMutation({
+  args: {
+    userId: v.id("users"),
+    sessionId: v.id("chatSessions"),
+    messageId: v.id("chatMessages"),
+    role: v.string(),
+    content: v.string(),
+    vector: v.array(v.float64()),
+  },
+  handler: async (ctx, args) => {
+    // One embedding per message — skip if already indexed
+    const existing = await ctx.db
+      .query("messageEmbeddings")
+      .withIndex("by_user_time", (q) => q.eq("userId", args.userId))
+      .order("desc")
+      .take(50);
+    if (existing.some((e) => e.messageId === args.messageId)) return;
+
+    await ctx.db.insert("messageEmbeddings", {
+      userId: args.userId,
+      sessionId: args.sessionId,
+      messageId: args.messageId,
+      role: args.role,
+      content: args.content,
+      vector: args.vector,
+      createdAt: Date.now(),
+    });
   },
 });

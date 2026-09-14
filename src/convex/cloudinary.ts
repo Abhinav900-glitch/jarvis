@@ -399,26 +399,61 @@ async function generateViaHuggingFace(
 
 /**
  * Provider 3 — Pollinations AI (free, no key required). Final fallback.
- * Returns a direct URL — Pollinations serves images publicly, no need to re-upload.
+ * Strategy: actually DOWNLOAD the image (GET, with retries) so we can store
+ * it on Cloudinary for a permanent URL. This is more reliable than returning
+ * the pollinations URL directly: their queue can serve 429/504 on the first
+ * few requests, and HEAD checks often pass before generation has finished.
  */
 async function generateViaPollinations(
+  ctx: ActionCtx,
   prompt: string,
 ): Promise<GeneratedImage> {
   const encoded = encodeURIComponent(prompt.slice(0, 800));
   const pollinationsUrl = `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024&nologo=true&model=flux&seed=${Date.now()}`;
 
-  // Verify the URL actually returns an image (HEAD check)
-  const check = await fetch(pollinationsUrl, { method: "HEAD" }).catch(() => null);
-  if (!check || !check.ok) {
-    throw new Error(`Pollinations generation failed (${check?.status ?? "network error"})`);
+  // GET with retries — generation can be slow or briefly rate-limited
+  let bytes: ArrayBuffer | null = null;
+  let lastStatus: number | string = "network error";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(pollinationsUrl, {
+        signal: AbortSignal.timeout(90_000),
+      });
+      const ct = res.headers.get("content-type") ?? "";
+      if (res.ok && ct.startsWith("image/")) {
+        const buf = await res.arrayBuffer();
+        if (buf.byteLength > 1000) {
+          bytes = buf;
+          break;
+        }
+        lastStatus = "empty image";
+      } else {
+        lastStatus = res.status;
+      }
+    } catch (err) {
+      lastStatus = err instanceof Error ? err.message : "network error";
+    }
+    if (attempt < 2) await new Promise((r) => setTimeout(r, 2500 * (attempt + 1)));
+  }
+  if (!bytes) {
+    throw new Error(`Pollinations generation failed (${lastStatus})`);
   }
 
-  // Use the Pollinations URL directly — it's a public CDN
-  return {
-    url: pollinationsUrl,
-    publicId: `jarvis-gen/poll-${Date.now()}`,
-    provider: "pollinations",
-  };
+  // Store on Cloudinary for a permanent CDN URL; fall back to the direct URL
+  try {
+    const stored = await uploadBytesToCloudinary(
+      ctx,
+      bytes,
+      `jarvis-gen/poll-${Date.now()}`,
+    );
+    return { url: stored.url, publicId: stored.publicId, provider: "pollinations" };
+  } catch {
+    return {
+      url: pollinationsUrl,
+      publicId: `jarvis-gen/poll-${Date.now()}`,
+      provider: "pollinations",
+    };
+  }
 }
 
 /**
@@ -517,7 +552,7 @@ export const generateImage = action({
       },
       {
         name: "pollinations",
-        run: () => generateViaPollinations(prompt),
+        run: () => generateViaPollinations(ctx, prompt),
       },
     ];
 

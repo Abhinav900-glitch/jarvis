@@ -83,6 +83,24 @@ const schema = defineSchema(
       createdAt: v.number(),
     }).index("by_session", ["sessionId"]),
 
+    // RAG: embeddings of past chat messages for semantic retrieval.
+    // Embeddings use HuggingFace feature-extraction (384-dim all-MiniLM-L6-v2).
+    messageEmbeddings: defineTable({
+      userId: v.id("users"),
+      sessionId: v.id("chatSessions"),
+      messageId: v.id("chatMessages"),
+      content: v.string(),
+      role: v.string(),
+      vector: v.array(v.float64()),
+      createdAt: v.number(),
+    })
+      .vectorIndex("by_embedding", {
+        vectorField: "vector",
+        dimensions: 384,
+        filterFields: ["userId"],
+      })
+      .index("by_user_time", ["userId", "createdAt"]),
+
     // Saved prompt library (per user)
     prompts: defineTable({
       userId: v.id("users"),

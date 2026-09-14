@@ -53,6 +53,8 @@ import {
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/hooks/use-auth";
 import { useVoicePlayer, useVoiceRecorder } from "@/hooks/use-voice";
+import { useLiveMode } from "@/hooks/use-live";
+import { Radio } from "lucide-react";
 import { CalculatorPanel } from "@/components/calculator-panel";
 import { toast } from "sonner";
 
@@ -370,6 +372,7 @@ export default function Dashboard() {
   const getCurrencyRateAction = useAction(api.ai.getCurrencyRate);
   const getWeatherAction = useAction(api.ai.getWeather);
   const detectWeatherAction = useAction(api.ai.detectWeatherQuery);
+  const indexMessagesAction = useAction(api.rag.indexMessages);
   const getCountryInfoAction = useAction(api.ai.getCountryInfo);
   const getOAuthStartUrlAction = useAction(api.cloudinary.getOAuthStartUrl);
   const disconnectCloudinaryAction = useAction(api.cloudinary.disconnectCloudinary);
@@ -624,6 +627,28 @@ export default function Dashboard() {
 
   const recorder = useVoiceRecorder(handleRecording);
 
+  // ---- Live mode: hands-free voice conversation loop ----
+  const live = useLiveMode((text) => {
+    setInput(text);
+    // Route through the same send pipeline as typed messages
+    void (async () => {
+      await runSendWithText(text);
+    })();
+  });
+  // Speak each new assistant reply when live mode is active
+  const spokenReplyRef = useRef<Id<"chatMessages"> | null>(null);
+  useEffect(() => {
+    if (!live.active || !messages || messages.length === 0 || sending) return;
+    const last = messages[messages.length - 1];
+    if (
+      last.role === "assistant" &&
+      spokenReplyRef.current !== last._id
+    ) {
+      spokenReplyRef.current = last._id;
+      live.deliverReply(last.content);
+    }
+  }, [messages, sending, live]);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const lastMsg = messages?.[messages.length - 1];
@@ -778,8 +803,8 @@ export default function Dashboard() {
     }
   };
 
-  const runSend = async () => {
-    const text = input.trim();
+  const runSendWithText = async (overrideText?: string) => {
+    const text = (overrideText ?? input).trim();
     if ((!text && pendingImages.length === 0 && !pendingFile) || sending)
       return;
     if (text.length > 8000) {
@@ -857,6 +882,7 @@ export default function Dashboard() {
     try {
       let sessionId: Id<"chatSessions">;
       let history: { role: string; content: string }[] = [];
+      let userMsgId: Id<"chatMessages"> | undefined;
 
       if (editingId) {
         // Edit flow: update the existing message, which also deletes later messages
@@ -873,16 +899,17 @@ export default function Dashboard() {
           .slice(-12)
           .map((m) => ({ role: m.role, content: m.content }));
       } else if (!activeId) {
-        const { sessionId: sid } = await startWithMessage({
+        const { sessionId: sid, messageId: uid } = await startWithMessage({
           content: messageContent,
           ...imagePayload,
           ...filePayload,
         });
         sessionId = sid;
+        userMsgId = uid;
         setActiveId(sid);
       } else {
         sessionId = activeId;
-        await appendMessage({
+        userMsgId = await appendMessage({
           sessionId,
           role: "user",
           content: messageContent,
@@ -901,7 +928,7 @@ export default function Dashboard() {
           text,
           history,
         );
-        await appendMessage({
+        const msgId = await appendMessage({
           sessionId,
           role: "assistant",
           content: answer.text,
@@ -910,10 +937,11 @@ export default function Dashboard() {
           usedSearch: true,
           sources,
         });
+        void indexForRag(sessionId, userMsgId, msgId, messageContent, answer.text).catch(() => {});
       } else {
         const visionUrls = imagePayload?.images?.map((i) => i.url);
         const answer = await runAsk(text, history, visionUrls && visionUrls.length > 0 ? visionUrls : undefined);
-        await appendMessage({
+        const msgId = await appendMessage({
           sessionId,
           role: "assistant",
           content: answer.text,
@@ -921,6 +949,7 @@ export default function Dashboard() {
           usedFallback: answer.usedFallback,
           usedSearch: false,
         });
+        void indexForRag(sessionId, userMsgId, msgId, messageContent, answer.text).catch(() => {});
       }
     } catch (err) {
       setAssistantError(
@@ -933,6 +962,36 @@ export default function Dashboard() {
       inputRef.current?.focus();
     }
   };
+
+
+  // ---- RAG indexing: embed an exchange so future questions can recall it ----
+  const indexForRag = async (
+    sessionId: Id<"chatSessions">,
+    userMsgId: Id<"chatMessages"> | undefined,
+    assistantMsgId: Id<"chatMessages">,
+    userContent: string,
+    assistantContent: string,
+  ) => {
+    const messages: {
+      messageId: Id<"chatMessages">;
+      role: string;
+      content: string;
+    }[] = [];
+    if (userMsgId && userContent) {
+      messages.push({ messageId: userMsgId, role: "user", content: userContent });
+    }
+    if (assistantMsgId && assistantContent) {
+      messages.push({
+        messageId: assistantMsgId,
+        role: "assistant",
+        content: assistantContent,
+      });
+    }
+    if (messages.length === 0) return;
+    await indexMessagesAction({ sessionId, messages });
+  };
+
+  const runSend = () => runSendWithText();
 
   const runAsk = async (
     prompt: string,
@@ -2387,6 +2446,18 @@ export default function Dashboard() {
                       <Mic className="size-3.5" />
                     )}
                   </button>
+                  <button
+                    onClick={() => (live.active ? live.stop() : live.start())}
+                    disabled={sending && !live.active}
+                    title={live.active ? "Stop Live Mode" : "Live voice conversation (hands-free)"}
+                    className={`inline-flex size-7 items-center justify-center rounded-lg transition-colors disabled:opacity-40 ${
+                      live.active
+                        ? "bg-red-500/10 text-red-500 hover:bg-red-500/20"
+                        : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                    }`}
+                  >
+                    <Radio className={`size-3.5 ${live.active ? "animate-pulse" : ""}`} />
+                  </button>
                   <Button
                     size="icon-sm"
                     onClick={() => void runSend()}
@@ -2403,6 +2474,31 @@ export default function Dashboard() {
                 </div>
               </div>
               </div>
+              {live.active && (
+                <div className="mb-2 flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs">
+                  <Radio className={`size-3.5 text-red-500 ${live.speaking ? "" : "animate-pulse"}`} />
+                  {live.speaking ? (
+                    <span className="text-foreground">Jarvis speaking — mic paused…</span>
+                  ) : live.listening ? (
+                    <span>
+                      Listening… <span className="italic text-muted-foreground">{live.interim}</span>
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">Live mode — say something</span>
+                  )}
+                  <button
+                    onClick={live.stop}
+                    className="ml-auto rounded px-1.5 py-0.5 font-medium text-red-500 transition-colors hover:bg-red-500/10"
+                  >
+                    End
+                  </button>
+                </div>
+              )}
+              {live.error && (
+                <div className="mb-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                  {live.error}
+                </div>
+              )}
               <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
                 {recorder.recording ? (
                   <span className="flex items-center gap-1.5 text-destructive">

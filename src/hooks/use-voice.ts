@@ -125,7 +125,7 @@ export function useVoicePlayer() {
   const play = useCallback(
     (id: string, audio: ArrayBuffer) => {
       stop();
-      const url = URL.createObjectURL(new Blob([audio], { type: "audio/mpeg" }));
+      const url = URL.createObjectURL(new Blob([audio], { type: "audio/wav" }));
       urlRef.current = url;
       const el = new Audio(url);
       el.onended = stop;
