@@ -1457,7 +1457,13 @@ export default function Dashboard() {
     setAssistantError(null);
     try {
       const { audio } = await speakAction({ text: content });
-      player.play(id, audio);
+      if (audio) {
+        player.play(id, audio);
+      } else {
+        // No server TTS available — browser voice takes over seamlessly.
+        player.setLoadingId(null);
+        speakViaBrowser(id, content);
+      }
     } catch {
       player.setLoadingId(null);
       speakViaBrowser(id, content);

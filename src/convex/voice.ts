@@ -220,24 +220,30 @@ const TTS_VOICES = [
 
 const TTS_FALLBACK_VOICE = "Celeste";
 
-/** Speak text aloud with Groq PlayAI TTS. Returns WAV audio bytes. */
+/**
+ * Speak text aloud. Returns WAV audio bytes when a server TTS model is
+ * available, or { audio: null } when none is — the client falls back to the
+ * browser's built-in speech synthesis in that case (no user-facing error).
+ */
 export const speak = action({
   args: { text: v.string(), voice: v.optional(v.string()) },
-  handler: async (ctx, args): Promise<{ audio: ArrayBuffer; voice: string }> => {
+  handler: async (ctx, args): Promise<{ audio: ArrayBuffer | null; voice: string }> => {
     const userId = await getAuthUserId(ctx);
     if (userId === null) throw new Error("Sign in to use speech output.");
 
     const key = process.env.GROQ_API_KEY;
-    if (!key) throw new Error("GROQ_API_KEY is not configured.");
+    if (!key) return { audio: null, voice: "browser" };
 
     const voice = TTS_VOICES.includes((args.voice ?? "") as never)
       ? (args.voice as string)
       : TTS_FALLBACK_VOICE;
 
-    // PlayAI TTS caps input at 10K characters.
+    // TTS models cap input at 10K characters.
     const text = args.text.trim().slice(0, 10_000);
-    if (!text) throw new Error("Nothing to speak.");
+    if (!text) return { audio: null, voice: "browser" };
 
+    // playai-tts was decommissioned by Groq; canopylabs/orpheus-v1-english is
+    // the current model (requires one-time org terms acceptance on the key).
     const res = await fetch("https://api.groq.com/openai/v1/audio/speech", {
       method: "POST",
       headers: {
@@ -245,9 +251,9 @@ export const speak = action({
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "playai-tts",
+        model: "canopylabs/orpheus-v1-english",
         input: text,
-        voice: `${voice} — PlayAI`,
+        voice: "tara",
         response_format: "wav",
       }),
     });
@@ -255,13 +261,14 @@ export const speak = action({
     if (!res.ok) {
       const errText = await res.text().catch(() => "");
       if (errText.includes("model_terms_required")) {
-        throw new Error(
-          "TTS needs one-time activation: open console.groq.com, accept the PlayAI TTS model terms, then try again.",
+        console.error(
+          "Groq TTS needs one-time activation: accept the orpheus-v1-english model terms at console.groq.com (client falls back to browser voice).",
         );
+      } else {
+        console.error("Groq TTS error", res.status, errText);
       }
-      // Log full response for debugging — shows in Convex function logs
-      console.error("Groq TTS error", res.status, errText);
-      throw new Error(`Speech synthesis failed (${res.status}): ${errText.slice(0, 200)}`);
+      // Graceful: let the client use browser speech synthesis instead.
+      return { audio: null, voice: "browser" };
     }
 
     const audioBuffer = await res.arrayBuffer();

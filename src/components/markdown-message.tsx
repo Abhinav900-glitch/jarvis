@@ -125,6 +125,83 @@ function normalizeMathDelimiters(input: string): string {
   return out.join("\n");
 }
 
+/**
+ * Hoist heavy inline math into display blocks. Models still occasionally cram
+ * multi-fraction chains into inline $...$, which renders cramped and garbled.
+ * Anything with 2+ fractions, integral/sum/root commands, chained equalities,
+ * or excessive length becomes its own $$...$$ block — KaTeX renders those
+ * beautifully, so this is a pure win. Fenced code and inline code are untouched.
+ */
+function hoistInlineMath(input: string): string {
+  const shouldHoist = (tex: string): boolean => {
+    const fracCount = (tex.match(/\\[dt]?frac\b/g) ?? []).length;
+    if (fracCount >= 2) return true;
+    if (/\\(?:int|iint|iiint|sum|prod|lim|sqrt|begin\{|cases|over)/.test(tex)) return true;
+    if ((tex.match(/=/g) ?? []).length >= 2) return true;
+    if (tex.length > 80) return true;
+    return false;
+  };
+
+  return input
+    .split(/(```[\s\S]*?```|`[^`\n]*`)/g)
+    .map((seg) => {
+      if (seg.startsWith("`")) return seg;
+      return seg.replace(
+        /(?<![\\$])\$(?!\s)((?:[^$\n\\]|\\.)+?)(?<!\s)\$(?!\$)/g,
+        (match: string, tex: string) => {
+          if (!shouldHoist(tex)) return match;
+          return `\n\n$$${tex}$$\n\n`;
+        },
+      );
+    })
+    .join("");
+}
+
+/**
+ * Guarantee blank lines around display-math blocks. When a $$...$$ block sits
+ * directly against a text line (no empty line between), remark parses it as a
+ * paragraph continuation and the tall KaTeX box overlaps the surrounding text.
+ */
+function separateDisplayMath(input: string): string {
+  return input
+    .split(/(```[\s\S]*?```)/g)
+    .map((seg) => {
+      if (seg.startsWith("```")) return seg;
+      const out: string[] = [];
+      let inDisplay = false;
+      for (const line of seg.split("\n")) {
+        const prev = out.length > 0 ? out[out.length - 1] : "";
+        const trimmed = line.trim();
+        const opensDisplay = /^\$\$/.test(trimmed);
+        const closesDisplay = /\$\$$/.test(trimmed);
+        const prevIsDisplayEnd =
+          /^\$\$$/.test(prev.trim()) ||
+          /^\$\$[\s\S]+\$\$$/.test(prev.trim());
+
+        if (!inDisplay) {
+          // Blank line before a display block that touches text above it
+          if (opensDisplay && prev.trim() !== "") out.push("");
+          // Blank line between a completed display block and text below it
+          if (
+            !opensDisplay &&
+            trimmed !== "" &&
+            prev.trim() !== "" &&
+            prevIsDisplayEnd
+          ) {
+            out.push("");
+          }
+          out.push(line);
+          if (opensDisplay && !closesDisplay) inDisplay = true;
+        } else {
+          out.push(line);
+          if (closesDisplay) inDisplay = false;
+        }
+      }
+      return out.join("\n");
+    })
+    .join("");
+}
+
 // ---------------------------------------------------------------------------
 // Code block — language label + copy button around the highlighted code
 // ---------------------------------------------------------------------------
@@ -264,7 +341,9 @@ function MarkdownMessageBase({
   content: string;
   sources?: Source[];
 }) {
-  const normalized = normalizeMathDelimiters(content);
+  const normalized = separateDisplayMath(
+    hoistInlineMath(normalizeMathDelimiters(content)),
+  );
 
   const withCitations = sources && sources.length > 0
     ? normalized.replace(/\[(\d+)\](?!\()/g, (match: string, n: string) => {

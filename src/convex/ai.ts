@@ -151,12 +151,19 @@ async function callGroq(
   key: string,
   turns: ChatTurn[],
 ): Promise<LlmResult> {
-  // Vision-capable model first (when images present), then reasoning, then fast.
-  const models = [
-    { id: "meta-llama/llama-4-scout-17b-16e-instruct", label: "llama-4-scout" },
-    { id: "openai/gpt-oss-120b", label: "gpt-oss-120b" },
-    { id: "qwen/qwen3.8-27b", label: "qwen3.8-27b" },
-  ];
+  // Model availability is verified live against this Groq key:
+  //  - qwen3.8-27b: the ONLY vision-capable model (accepts image_url parts)
+  //  - gpt-oss-120b / gpt-oss-20b: strongest text models (no image support)
+  // Reasoning models spend part of the token budget thinking, so the cap is
+  // generous — and if `content` is empty we surface `reasoning` as a fallback.
+  const hasImages = turns.some((t) => Array.isArray(t.content));
+  const models = hasImages
+    ? [{ id: "qwen/qwen3.8-27b", label: "qwen3.8-27b" }]
+    : [
+        { id: "openai/gpt-oss-120b", label: "gpt-oss-120b" },
+        { id: "qwen/qwen3.8-27b", label: "qwen3.8-27b" },
+        { id: "openai/gpt-oss-20b", label: "gpt-oss-20b" },
+      ];
 
   const failures: string[] = [];
   for (const m of models) {
@@ -170,7 +177,8 @@ async function callGroq(
         model: m.id,
         messages: [{ role: "system", content: JARVIS_PROMPT }, ...turns],
         temperature: 0.6,
-        max_tokens: 4096,
+        max_tokens: 8192,
+        reasoning_effort: "low",
       }),
     });
     if (!res.ok) {
@@ -178,9 +186,15 @@ async function callGroq(
       continue;
     }
     const data = (await res.json()) as {
-      choices?: { message?: { content?: string } }[];
+      choices?: {
+        message?: {
+          content?: string;
+          reasoning?: string;
+        };
+      }[];
     };
-    const text = data.choices?.[0]?.message?.content?.trim();
+    const message = data.choices?.[0]?.message;
+    const text = message?.content?.trim() || message?.reasoning?.trim() || "";
     if (!text) {
       failures.push(`${m.label} (empty response)`);
       continue;
@@ -1108,7 +1122,7 @@ export const generateTitle = action({
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            model: "llama-3.1-8b-instant",
+            model: "openai/gpt-oss-20b",
             messages: [
               {
                 role: "system",
