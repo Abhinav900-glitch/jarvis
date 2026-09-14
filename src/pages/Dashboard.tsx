@@ -482,11 +482,22 @@ export default function Dashboard() {
 
   const uploadFiles = async (files: File[]) => {
     if (files.length === 0) return;
+    // Reject oversized files before upload starts (25 MB per file)
+    const MAX_FILE_BYTES = 25 * 1024 * 1024;
+    const tooBig = files.filter((f) => f.size > MAX_FILE_BYTES);
+    if (tooBig.length > 0) {
+      setAssistantError(
+        `${tooBig.map((f) => f.name).join(", ")} ${tooBig.length > 1 ? "exceed" : "exceeds"} the 25 MB limit.`,
+      );
+    }
+    const acceptable = files.filter((f) => f.size <= MAX_FILE_BYTES);
+    if (acceptable.length === 0) return;
+    files = acceptable;
     setUploading(true);
-    setUploadCount(files.length);
+    setUploadCount(acceptable.length);
     setAssistantError(null);
     try {
-      const results = await Promise.all(files.map((f) => uploadFile(f)));
+      const results = await Promise.all(acceptable.map((f) => uploadFile(f)));
       const images: { url: string; publicId: string; provider?: string }[] =
         [];
       let firstFile: {
@@ -503,9 +514,9 @@ export default function Dashboard() {
         } else if (!firstFile) {
           firstFile = {
             url: r.url,
-            name: files[i].name,
-            type: files[i].type || r.resourceType,
-            size: files[i].size,
+            name: acceptable[i].name,
+            type: acceptable[i].type || r.resourceType,
+            size: acceptable[i].size,
           };
         }
       });
@@ -771,6 +782,10 @@ export default function Dashboard() {
     const text = input.trim();
     if ((!text && pendingImages.length === 0 && !pendingFile) || sending)
       return;
+    if (text.length > 8000) {
+      setAssistantError("Message too long — keep it under 8,000 characters.");
+      return;
+    }
 
     // PDF attachments route through the document-Q&A flow (extract text + ask)
     if (pendingFile && /pdf/.test(pendingFile.type)) {

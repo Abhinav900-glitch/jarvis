@@ -33,6 +33,21 @@ function extractText(node: unknown): string {
 }
 
 /**
+ * Only allow safe URL schemes in rendered links and images. Blocks
+ * javascript:, vbscript:, data: (except images), and other injection vectors
+ * that markdown renderers otherwise pass through.
+ */
+const SAFE_HREF = /^(https?:\/\/|mailto:|\/|#)/i;
+const SAFE_IMG = /^(https?:\/\/|data:image\/)/i;
+
+export function sanitizeUrl(url: string, allowDataImage = false): string | undefined {
+  const pattern = allowDataImage ? SAFE_IMG : SAFE_HREF;
+  const trimmed = url.trim();
+  if (!trimmed || !pattern.test(trimmed)) return undefined;
+  return trimmed;
+}
+
+/**
  * Normalize AI-style LaTeX delimiters to remark-math's `$...$` / `$$...$$`.
  * Handles:
  *  - `\[ ... \]` display (OpenAI convention)
@@ -129,7 +144,19 @@ function CodeBlock({ children }: { children?: React.ReactNode }) {
 
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(raw);
+      // navigator.clipboard requires HTTPS; fall back for insecure contexts
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(raw);
+      } else {
+        const ta = document.createElement("textarea");
+        ta.value = raw;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      }
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1600);
     } catch {
@@ -169,28 +196,45 @@ function CodeBlock({ children }: { children?: React.ReactNode }) {
 
 const components: Components = {
   a: ({ href, children }) => {
+    const safeHref = href ? sanitizeUrl(href) : undefined;
     const text = extractText(children).trim();
-    if (href && /^\d+$/.test(text)) {
+    if (safeHref && /^\d+$/.test(text)) {
       return (
         <a
-          href={href}
+          href={safeHref}
           target="_blank"
-          rel="noopener noreferrer"
+          rel="noopener noreferrer nofollow"
           className="mx-px inline-flex h-4 min-w-4 items-center justify-center rounded-sm border px-0.5 align-super text-[10px] leading-none text-muted-foreground transition-colors hover:border-foreground/40 hover:text-foreground"
         >
           {text}
         </a>
       );
     }
+    if (!safeHref) {
+      return <span>{children}</span>;
+    }
     return (
       <a
-        href={href}
+        href={safeHref}
         target="_blank"
-        rel="noopener noreferrer"
+        rel="noopener noreferrer nofollow"
         className="font-medium underline underline-offset-2 hover:text-foreground"
       >
         {children}
       </a>
+    );
+  },
+  img: ({ src, alt }) => {
+    const safeSrc = typeof src === "string" ? sanitizeUrl(src, true) : undefined;
+    if (!safeSrc) return null;
+    return (
+      <img
+        src={safeSrc}
+        alt={alt ?? ""}
+        loading="lazy"
+        referrerPolicy="no-referrer"
+        className="max-w-full rounded-[var(--radius-sm)]"
+      />
     );
   },
   pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,

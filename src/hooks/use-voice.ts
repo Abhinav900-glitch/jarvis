@@ -51,6 +51,19 @@ export function useVoiceRecorder(onDone: (audio: Blob) => void): VoiceRecorder {
   const start = useCallback(async () => {
     setError(null);
     if (recorderRef.current) return;
+
+    // getUserMedia requires a secure context (HTTPS or localhost).
+    if (typeof window !== "undefined" && !window.isSecureContext) {
+      setError(
+        "Microphone needs a secure connection — open this app over HTTPS.",
+      );
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError("Voice input isn't supported in this browser.");
+      return;
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mime = MediaRecorder.isTypeSupported("audio/webm")
