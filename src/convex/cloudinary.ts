@@ -1,9 +1,200 @@
 "use node";
 
 import { v } from "convex/values";
-import { action } from "./_generated/server";
+import { action, type ActionCtx } from "./_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { v2 as cloudinary } from "cloudinary";
+import { internal as internalApi } from "./_generated/api";
+
+// ---------------------------------------------------------------------------
+// Cloudinary OAuth 2.0 (authorization code grant)
+// Docs: https://cloudinary.com/documentation/using_oauth_to_access_cloudinary_apis
+// Env: CLOUDINARY_CLIENT_ID, CLOUDINARY_CLIENT_SECRET
+// Access tokens live ~5 minutes; refresh tokens (3 months, single-use) keep
+// the connection alive — handled transparently by getFreshAccessToken().
+// ---------------------------------------------------------------------------
+
+const OAUTH_AUTHORIZE_URL = "https://oauth.cloudinary.com/oauth2/auth";
+const OAUTH_TOKEN_URL = "https://oauth.cloudinary.com/oauth2/token";
+const OAUTH_SCOPES = "upload asset_management offline_access";
+
+interface TokenResponse {
+  access_token?: string;
+  refresh_token?: string;
+  expires_in?: number;
+  scope?: string;
+  error?: string;
+  error_description?: string;
+}
+
+function oauthConfig(): { clientId: string; clientSecret: string } | null {
+  const clientId = process.env.CLOUDINARY_CLIENT_ID;
+  const clientSecret = process.env.CLOUDINARY_CLIENT_SECRET;
+  if (!clientId || !clientSecret) return null;
+  return { clientId, clientSecret };
+}
+
+/** Build the consent-page URL the user must visit to grant access. */
+export const getOAuthStartUrl = action({
+  args: { redirectUri: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) throw new Error("Sign in first.");
+
+    const cfg = oauthConfig();
+    if (!cfg) {
+      throw new Error(
+        "Cloudinary OAuth app not configured — add CLOUDINARY_CLIENT_ID and CLOUDINARY_CLIENT_SECRET in the Keys tab.",
+      );
+    }
+
+    const state =
+      crypto.randomUUID().replace(/-/g, "") +
+      crypto.randomUUID().replace(/-/g, "");
+    await ctx.runMutation(internalApi.cloudinaryOAuth.setPendingState, {
+      userId,
+      state,
+      redirectUri: args.redirectUri,
+    });
+
+    const url = new URL(OAUTH_AUTHORIZE_URL);
+    url.searchParams.set("response_type", "code");
+    url.searchParams.set("client_id", cfg.clientId);
+    url.searchParams.set("redirect_uri", args.redirectUri);
+    url.searchParams.set("scope", OAUTH_SCOPES);
+    url.searchParams.set("state", state);
+
+    return { url: url.toString() };
+  },
+});
+
+/** Exchange the authorization code from the callback for tokens and store them. */
+export const exchangeCode = action({
+  args: {
+    code: v.string(),
+    state: v.string(),
+    redirectUri: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) throw new Error("Sign in first.");
+
+    const cfg = oauthConfig();
+    if (!cfg) throw new Error("Cloudinary OAuth app not configured.");
+
+    // Validate state against what we stored at flow start (CSRF protection)
+    const stored = await ctx.runQuery(
+      internalApi.cloudinaryOAuth.getStoredAuth,
+      { userId },
+    );
+    if (!stored || stored.pendingState !== args.state) {
+      throw new Error("OAuth state mismatch — restart the connection flow.");
+    }
+
+    const redirectUri = stored.redirectUri ?? args.redirectUri;
+    if (!redirectUri) {
+      throw new Error("Missing redirect URI — restart the connection flow.");
+    }
+
+    const body = new URLSearchParams({
+      grant_type: "authorization_code",
+      code: args.code,
+      redirect_uri: redirectUri,
+      client_id: cfg.clientId,
+      client_secret: cfg.clientSecret,
+    });
+
+    const res = await fetch(OAUTH_TOKEN_URL, { method: "POST", body });
+    const data = (await res.json()) as TokenResponse;
+    if (!res.ok || !data.access_token) {
+      console.error("Cloudinary token exchange failed", res.status, data);
+      throw new Error(
+        `Token exchange failed (${res.status})${
+          data.error_description ? `: ${data.error_description}` : ""
+        }`,
+      );
+    }
+
+    await ctx.runMutation(internalApi.cloudinaryOAuth.saveTokens, {
+      userId,
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token,
+      expiresIn: data.expires_in,
+      scope: data.scope,
+    });
+
+    return { ok: true as const };
+  },
+});
+
+/** User-initiated disconnect. */
+export const disconnectCloudinary = action({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) throw new Error("Sign in first.");
+    await ctx.runMutation(internalApi.cloudinaryOAuth.disconnect, { userId });
+    return { ok: true as const };
+  },
+});
+
+/**
+ * Get a valid OAuth access token for the signed-in user, auto-refreshing when
+ * expired. Returns null when there is no OAuth connection (callers fall back
+ * to API key/secret auth).
+ */
+export async function getFreshAccessToken(
+  ctx: ActionCtx,
+): Promise<string | null> {
+  try {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) return null;
+
+    const row = await ctx.runQuery(internalApi.cloudinaryOAuth.getStoredAuth, {
+      userId,
+    });
+    if (!row?.accessToken) return null;
+
+    // Refresh 30s before expiry to be safe
+    if (row.expiresAt && row.expiresAt - 30_000 > Date.now()) {
+      return row.accessToken;
+    }
+    if (!row.refreshToken) return null;
+
+    const cfg = oauthConfig();
+    if (!cfg) return null;
+
+    const body = new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: row.refreshToken,
+      client_id: cfg.clientId,
+      client_secret: cfg.clientSecret,
+    });
+    const res = await fetch(OAUTH_TOKEN_URL, { method: "POST", body });
+    const data = (await res.json()) as TokenResponse;
+
+    if (res.ok && data.access_token) {
+      await ctx.runMutation(internalApi.cloudinaryOAuth.saveTokens, {
+        userId,
+        accessToken: data.access_token,
+        // Refresh tokens are single-use — Cloudinary issues a new one here
+        refreshToken: data.refresh_token,
+        expiresIn: data.expires_in,
+        scope: data.scope,
+      });
+      return data.access_token;
+    }
+
+    if (data.error === "invalid_grant") {
+      // Refresh token revoked/expired → force reconnect
+      await ctx.runMutation(internalApi.cloudinaryOAuth.clearTokens, { userId });
+    }
+    return null;
+  } catch (err) {
+    console.error("[cloudinary-oauth] token refresh failed:", err);
+    return null; // any failure → fall back to API key/secret
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -22,28 +213,38 @@ function cloudinaryConfig() {
 /**
  * Store generated image bytes on Cloudinary so they persist on the CDN
  * regardless of which provider generated them.
+ * Uses the OAuth access token when the user has connected Cloudinary,
+ * otherwise falls back to signed API key/secret auth.
  */
 async function uploadBytesToCloudinary(
+  ctx: ActionCtx,
   bytes: ArrayBuffer,
   publicId: string,
 ): Promise<{ url: string; publicId: string }> {
   const { cloudName, apiKey, apiSecret } = cloudinaryConfig();
+  const oauthToken = await getFreshAccessToken(ctx);
   const timestamp = Math.floor(Date.now() / 1000);
-  const signature = cloudinary.utils.api_sign_request(
-    { timestamp, public_id: publicId },
-    apiSecret,
-  );
 
   const form = new FormData();
   form.append("file", new Blob([bytes], { type: "image/png" }), "generated.png");
-  form.append("api_key", apiKey);
   form.append("timestamp", String(timestamp));
-  form.append("signature", signature);
   form.append("public_id", publicId);
+
+  const headers: Record<string, string> = {};
+  if (oauthToken) {
+    headers["Authorization"] = `Bearer ${oauthToken}`;
+  } else {
+    const signature = cloudinary.utils.api_sign_request(
+      { timestamp, public_id: publicId },
+      apiSecret,
+    );
+    form.append("api_key", apiKey);
+    form.append("signature", signature);
+  }
 
   const res = await fetch(
     `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`,
-    { method: "POST", body: form },
+    { method: "POST", headers, body: form },
   );
   if (!res.ok) {
     const errText = await res.text().catch(() => "");
@@ -67,26 +268,37 @@ interface GeneratedImage {
 /**
  * Provider 1 — Cloudinary Image Generation add-on.
  * Returns a URL directly; the asset already lives on Cloudinary.
+ * Uses OAuth Bearer auth when connected, else API key/secret Basic auth.
  */
 async function generateViaCloudinary(
+  ctx: ActionCtx,
   prompt: string,
   model?: string,
   aspectRatio?: string,
 ): Promise<GeneratedImage> {
   const { cloudName, apiKey, apiSecret } = cloudinaryConfig();
+  const oauthToken = await getFreshAccessToken(ctx);
 
   const body: Record<string, unknown> = { prompt };
   if (model && model !== "default") body.model = model;
   if (aspectRatio) body.aspect_ratio = aspectRatio;
 
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (oauthToken) {
+    headers["Authorization"] = `Bearer ${oauthToken}`;
+  } else {
+    headers["Authorization"] = `Basic ${Buffer.from(
+      `${apiKey}:${apiSecret}`,
+    ).toString("base64")}`;
+  }
+
   const res = await fetch(
     `https://api.cloudinary.com/v2/generate/${cloudName}/text_to_image`,
     {
       method: "POST",
-      headers: {
-        Authorization: `Basic ${Buffer.from(`${apiKey}:${apiSecret}`).toString("base64")}`,
-        "Content-Type": "application/json",
-      },
+      headers,
       body: JSON.stringify(body),
     },
   );
@@ -133,6 +345,7 @@ async function generateViaCloudinary(
  * Returns raw PNG bytes, which we store on Cloudinary for a persistent URL.
  */
 async function generateViaHuggingFace(
+  ctx: ActionCtx,
   prompt: string,
 ): Promise<GeneratedImage> {
   const token = process.env.HUGGING_FACE_TOKEN;
@@ -174,7 +387,7 @@ async function generateViaHuggingFace(
 
   const publicId = `jarvis-gen/hf-${Date.now()}`;
   try {
-    const stored = await uploadBytesToCloudinary(bytes, publicId);
+    const stored = await uploadBytesToCloudinary(ctx, bytes, publicId);
     return { url: stored.url, publicId: stored.publicId, provider: "huggingface" };
   } catch {
     // If Cloudinary upload fails, return a data URL so the client can still display it
@@ -296,11 +509,11 @@ export const generateImage = action({
       {
         name: "cloudinary",
         run: () =>
-          generateViaCloudinary(prompt, args.model, args.aspectRatio),
+          generateViaCloudinary(ctx, prompt, args.model, args.aspectRatio),
       },
       {
         name: "huggingface",
-        run: () => generateViaHuggingFace(prompt),
+        run: () => generateViaHuggingFace(ctx, prompt),
       },
       {
         name: "pollinations",

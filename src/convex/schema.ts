@@ -83,6 +83,18 @@ const schema = defineSchema(
       createdAt: v.number(),
     }).index("by_session", ["sessionId"]),
 
+    // Cloudinary OAuth 2.0 connection (one row per user)
+    cloudinaryAuth: defineTable({
+      userId: v.id("users"),
+      accessToken: v.optional(v.string()),
+      refreshToken: v.optional(v.string()),
+      expiresAt: v.optional(v.number()), // ms epoch
+      scope: v.optional(v.string()),
+      redirectUri: v.optional(v.string()), // redirect used at flow start (must match at exchange)
+      pendingState: v.optional(v.string()), // CSRF state while connecting
+      connectedAt: v.optional(v.number()),
+    }).index("by_user", ["userId"]),
+
     // tableName: defineTable({
     //   ...
     //   // table fields

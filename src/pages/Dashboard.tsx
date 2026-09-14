@@ -51,6 +51,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/hooks/use-auth";
 import { useVoicePlayer, useVoiceRecorder } from "@/hooks/use-voice";
 import { CalculatorPanel } from "@/components/calculator-panel";
+import { toast } from "sonner";
 
 // ---------------------------------------------------------------------------
 // Source types
@@ -366,6 +367,11 @@ export default function Dashboard() {
   const getCurrencyRateAction = useAction(api.ai.getCurrencyRate);
   const getWeatherAction = useAction(api.ai.getWeather);
   const getCountryInfoAction = useAction(api.ai.getCountryInfo);
+  const getOAuthStartUrlAction = useAction(api.cloudinary.getOAuthStartUrl);
+  const disconnectCloudinaryAction = useAction(api.cloudinary.disconnectCloudinary);
+
+  // Cloudinary OAuth connection status (live query)
+  const cloudinaryStatus = useQuery(api.cloudinaryOAuth.getStatus);
 
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -403,6 +409,7 @@ export default function Dashboard() {
   const [regionResult, setRegionResult] = useState<Record<string, unknown> | null>(null);
   const [regionBusy, setRegionBusy] = useState(false);
   const [showCalculator, setShowCalculator] = useState(false);
+  const [cloudinaryConnecting, setCloudinaryConnecting] = useState(false);
 
   const editMessage = useMutation(api.chats.editMessage);
   const searchSessionsQuery = useQuery(
@@ -904,6 +911,32 @@ export default function Dashboard() {
     }
   };
 
+  // --- Cloudinary OAuth connect / disconnect ---
+  const handleConnectCloudinary = async () => {
+    setCloudinaryConnecting(true);
+    try {
+      const redirectUri = `${window.location.origin}/cloudinary/callback`;
+      const { url } = await getOAuthStartUrlAction({ redirectUri });
+      window.location.href = url; // full-page redirect to Cloudinary consent
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to start Cloudinary connection.",
+      );
+      setCloudinaryConnecting(false);
+    }
+  };
+
+  const handleDisconnectCloudinary = async () => {
+    try {
+      await disconnectCloudinaryAction({});
+      toast.success("Cloudinary disconnected — using API key auth.");
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to disconnect Cloudinary.",
+      );
+    }
+  };
+
   // --- Export chat as Markdown ---
   const handleExportChat = () => {
     if (!messages || messages.length === 0) return;
@@ -1316,6 +1349,21 @@ export default function Dashboard() {
                       <Check className="ml-auto size-4" />
                     ) : null}
                   </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={handleConnectCloudinary} disabled={cloudinaryConnecting || cloudinaryStatus?.connected}>
+                    <Link2 className="size-4" />
+                    {cloudinaryStatus?.connected
+                      ? "Cloudinary connected ✓"
+                      : cloudinaryConnecting
+                        ? "Connecting to Cloudinary…"
+                        : "Connect Cloudinary (OAuth)"}
+                  </DropdownMenuItem>
+                  {cloudinaryStatus?.connected ? (
+                    <DropdownMenuItem onClick={handleDisconnectCloudinary}>
+                      <X className="size-4" />
+                      Disconnect Cloudinary
+                    </DropdownMenuItem>
+                  ) : null}
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={handleAnalyze} disabled={!lastMsg}>
                     <Languages className="size-4" />
