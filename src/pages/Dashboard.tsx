@@ -54,6 +54,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/hooks/use-auth";
 import { useVoicePlayer, useVoiceRecorder } from "@/hooks/use-voice";
 import { useLiveMode } from "@/hooks/use-live";
+import { COUNTRIES, getCountry, AUTHOR } from "@/lib/languages";
 import { Radio } from "lucide-react";
 import { CalculatorPanel } from "@/components/calculator-panel";
 import { toast } from "sonner";
@@ -364,6 +365,7 @@ export default function Dashboard() {
   const analyzeAction = useAction(api.ai.analyzeText);
   const newsAction = useAction(api.ai.searchNews);
   const transcribeAction = useAction(api.voice.transcribe);
+  const transcribeWhisperAction = useAction(api.voice.transcribeWhisper);
   const speakAction = useAction(api.voice.speak);
   const getSignedUploadUrl = useAction(api.cloudinary.getSignedUploadUrl);
   const generateImageAction = useAction(api.cloudinary.generateImage);
@@ -419,6 +421,25 @@ export default function Dashboard() {
       return "UTC";
     }
   });
+  const [countryCode, setCountryCode] = useState(() => {
+    try {
+      return localStorage.getItem("jarvis-country") || "IN";
+    } catch {
+      return "IN";
+    }
+  });
+
+  const changeCountry = (code: string) => {
+    setCountryCode(code);
+    const cfg = getCountry(code);
+    setRegionTimezone(cfg.timezone);
+    try {
+      localStorage.setItem("jarvis-country", code);
+      localStorage.setItem("jarvis-timezone", cfg.timezone);
+    } catch {
+      // ignore
+    }
+  };
   const [regionResult, setRegionResult] = useState<Record<string, unknown> | null>(null);
   const [regionBusy, setRegionBusy] = useState(false);
   const [showCalculator, setShowCalculator] = useState(false);
@@ -640,14 +661,19 @@ export default function Dashboard() {
 
   const recorder = useVoiceRecorder(handleRecording);
 
-  // ---- Live mode: hands-free voice conversation loop ----
-  const live = useLiveMode((text) => {
-    setInput(text);
-    // Route through the same send pipeline as typed messages
-    void (async () => {
-      await runSendWithText(text);
-    })();
-  });
+  // ---- Live mode: Whisper STT → chat pipeline → spoken reply ----
+  const liveTurnRef = useRef<(text: string) => Promise<void>>(async () => {});
+  const live = useLiveMode(
+    async (audio: Blob, country: string) => {
+      const lang = getCountry(country).language;
+      const bytes = await audio.arrayBuffer();
+      const { text } = await transcribeWhisperAction({ audio: bytes, language: lang });
+      if (!text) return "";
+      await liveTurnRef.current(text);
+      return text;
+    },
+    countryCode,
+  );
   // Speak each new assistant reply when live mode is active
   const spokenReplyRef = useRef<Id<"chatMessages"> | null>(null);
   useEffect(() => {
@@ -832,6 +858,12 @@ export default function Dashboard() {
       return;
     }
 
+    // Country persona: Jarvis speaks the user's language & regional context
+    const countryPersona = getCountry(countryCode).persona;
+    const effectiveText = editingId || deepResearch || pendingImages.length > 0 || pendingFile
+      ? text
+      : `${text}\n\n[System: ${countryPersona}]`;
+
     // Natural-language weather: fetch live data directly, no slash command needed
     if (!editingId && text && pendingImages.length === 0 && !pendingFile) {
       try {
@@ -953,7 +985,7 @@ export default function Dashboard() {
         void indexForRag(sessionId, userMsgId, msgId, messageContent, answer.text).catch(() => {});
       } else {
         const visionUrls = imagePayload?.images?.map((i) => i.url);
-        const answer = await runAsk(text, history, visionUrls && visionUrls.length > 0 ? visionUrls : undefined);
+        const answer = await runAsk(effectiveText, history, visionUrls && visionUrls.length > 0 ? visionUrls : undefined);
         const msgId = await appendMessage({
           sessionId,
           role: "assistant",
@@ -1005,6 +1037,9 @@ export default function Dashboard() {
   };
 
   const runSend = () => runSendWithText();
+  liveTurnRef.current = async (text: string) => {
+    await runSendWithText(text);
+  };
 
   const runAsk = async (
     prompt: string,
@@ -1304,6 +1339,19 @@ export default function Dashboard() {
         .replace(/```[\s\S]*?```/g, " code block ")
         .replace(/[#*_`~\[\]]/g, ""),
     );
+    // Match the voice to the selected country's language
+    const tag = getCountry(countryCode).langTag;
+    const langPrefix = tag.split("-")[0];
+    const voices = synth.getVoices();
+    const voice =
+      voices.find((v) => v.lang === tag) ??
+      voices.find((v) => v.lang.startsWith(langPrefix));
+    if (voice) {
+      utt.voice = voice;
+      utt.lang = voice.lang;
+    } else {
+      utt.lang = tag;
+    }
     utt.rate = 1;
     utt.pitch = 1;
     utt.onend = () => {
@@ -1784,13 +1832,15 @@ export default function Dashboard() {
               <span className="inline-flex items-center gap-1">
                 🌐
                 <select
-                  value={regionTimezone}
-                  onChange={(e) => setRegionTimezone(e.target.value)}
+                  value={countryCode}
+                  onChange={(e) => changeCountry(e.target.value)}
                   className="cursor-pointer appearance-none bg-transparent font-medium text-foreground outline-none"
-                  title="Select timezone"
+                  title="Select country — Jarvis adapts language & region"
                 >
-                  {["UTC", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "Europe/London", "Europe/Paris", "Europe/Berlin", "Asia/Tokyo", "Asia/Shanghai", "Asia/Kolkata", "Asia/Dubai", "Asia/Singapore", "Australia/Sydney", "Pacific/Auckland"].map((tz) => (
-                    <option key={tz} value={tz}>{tz.replace(/_/g, " ")}</option>
+                  {COUNTRIES.map((cn) => (
+                    <option key={cn.code} value={cn.code}>
+                      {cn.flag} {cn.name} — {cn.languageName}
+                    </option>
                   ))}
                 </select>
               </span>
@@ -2500,10 +2550,25 @@ export default function Dashboard() {
                 <div className="mb-2 flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs">
                   <Radio className={`size-3.5 text-red-500 ${live.speaking ? "" : "animate-pulse"}`} />
                   {live.speaking ? (
-                    <span className="text-foreground">Jarvis speaking — mic paused…</span>
+                    <span className="text-foreground">Jarvis speaking — interrupt anytime, just talk…</span>
+                  ) : live.processing ? (
+                    <span className="text-foreground">Thinking…</span>
                   ) : live.listening ? (
                     <span>
-                      Listening… <span className="italic text-muted-foreground">{live.interim}</span>
+                      Listening
+                      <span className="ml-2 inline-flex gap-0.5">
+                        {[0, 1, 2, 3].map((i) => (
+                          <span
+                            key={i}
+                            className="inline-block h-2.5 w-0.5 rounded-full bg-red-500"
+                            style={{
+                              opacity: 0.35 + Math.min(0.65, live.level * 3),
+                              transform: `scaleY(${0.5 + Math.min(1.2, live.level * 6)})`,
+                              transition: "transform 90ms linear",
+                            }}
+                          />
+                        ))}
+                      </span>
                     </span>
                   ) : (
                     <span className="text-muted-foreground">Live mode — say something</span>

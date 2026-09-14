@@ -146,6 +146,63 @@ export const transcribe = action({
 });
 
 // ---------------------------------------------------------------------------
+// Groq Whisper STT — fast multilingual speech-to-text (live mode engine)
+// whisper-large-v3 transcribes in milliseconds and handles Hindi, Russian,
+// English, and 90+ other languages natively.
+// ---------------------------------------------------------------------------
+
+export const transcribeWhisper = action({
+  args: {
+    audio: v.bytes(),
+    language: v.optional(v.string()), // ISO-639-1 hint e.g. "hi", "ru", "en"
+  },
+  handler: async (ctx, args): Promise<{ text: string; language: string }> => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) throw new Error("Sign in to use voice.");
+
+    const key = process.env.GROQ_API_KEY;
+    if (!key) {
+      throw new Error("GROQ_API_KEY is not configured.");
+    }
+    if (args.audio.byteLength === 0) throw new Error("Empty recording.");
+    if (args.audio.byteLength > 25 * 1024 * 1024) {
+      throw new Error("Recording too large — keep clips under 25 MB.");
+    }
+
+    const form = new FormData();
+    form.append(
+      "file",
+      new Blob([args.audio], { type: "audio/webm" }),
+      "speech.webm",
+    );
+    form.append("model", "whisper-large-v3");
+    form.append("response_format", "json");
+    form.append("temperature", "0");
+    if (args.language) {
+      form.append("language", args.language);
+    }
+
+    const res = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}` },
+      body: form,
+      signal: AbortSignal.timeout(60_000),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      console.error("Groq Whisper error", res.status, errText.slice(0, 300));
+      throw new Error(`Transcription failed (${res.status}): ${errText.slice(0, 150)}`);
+    }
+
+    const data = (await res.json()) as { text?: string; language?: string };
+    const text = (data.text ?? "").trim();
+    if (!text) throw new Error("No speech detected.");
+    return { text, language: data.language ?? args.language ?? "en" };
+  },
+});
+
+// ---------------------------------------------------------------------------
 // Groq PlayAI TTS — Jarvis speaks back (uses the existing GROQ_API_KEY)
 // ---------------------------------------------------------------------------
 

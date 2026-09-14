@@ -1,180 +1,203 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getCountry } from "@/lib/languages";
 
 // ---------------------------------------------------------------------------
 // useLiveMode — hands-free voice conversation (ChatGPT / Gemini Live style)
 //
-// Loop: browser SpeechRecognition listens → on final transcript, calls
-// onTurn(text) (Dashboard sends it through the normal AI pipeline) → when the
-// reply arrives, speak() reads it aloud via SpeechSynthesis → listening
-// resumes automatically. Mic is paused while Jarvis talks so he doesn't
-// hear himself.
+// Architecture (fully free stack, per the Groq voice pipeline):
+//   1. Hearing: MediaRecorder captures your voice → Groq Whisper
+//      (whisper-large-v3) transcribes it in milliseconds. Multilingual —
+//      Hindi, Russian, Arabic, and 90+ languages, guided by the selected
+//      country.
+//   2. Thinking: the transcript goes through the normal chat pipeline
+//      (Groq LLM with automatic fallback).
+//   3. Speaking: the reply is spoken via Web Speech API (browser-native,
+//      free) with a voice matched to the selected country's language.
 //
-// Uses only browser-native APIs (Web Speech API), so it works with zero
-// extra keys and no audio streaming infrastructure. Requires Chrome/Edge
-// (SpeechRecognition) and a secure context (HTTPS).
+// Extras:
+//   • Barge-in / natural interruption: mic volume is monitored while Jarvis
+//     talks — if you speak over him, speech is cancelled instantly and he
+//     listens again.
+//   • Auto-restart: after each reply, listening resumes automatically.
 // ---------------------------------------------------------------------------
-
-interface SpeechRecognitionLike {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  start(): void;
-  stop(): void;
-  abort(): void;
-  onresult: ((e: SpeechRecognitionEventLike) => void) | null;
-  onerror: ((e: { error: string }) => void) | null;
-  onend: (() => void) | null;
-}
-
-interface SpeechRecognitionEventLike {
-  resultIndex: number;
-  results: {
-    length: number;
-    [i: number]: {
-      isFinal: boolean;
-      length: number;
-      [j: number]: { transcript: string };
-    };
-  };
-}
-
-type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
-
-function getRecognitionCtor(): SpeechRecognitionCtor | null {
-  if (typeof window === "undefined") return null;
-  const w = window as unknown as {
-    SpeechRecognition?: SpeechRecognitionCtor;
-    webkitSpeechRecognition?: SpeechRecognitionCtor;
-  };
-  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
-}
 
 export interface LiveMode {
   active: boolean;
   listening: boolean;
   speaking: boolean;
-  interim: string;
+  processing: boolean;
+  /** Live mic level 0..1 — drives the orb pulse */
+  level: number;
   error: string | null;
   start: () => void;
   stop: () => void;
-  /** Feed Jarvis's reply into the loop — it gets spoken, then listening resumes. */
+  /** Feed Jarvis's reply text — spoken aloud, then listening resumes. */
   deliverReply: (text: string) => void;
 }
 
-export function useLiveMode(onTurn: (text: string) => void): LiveMode {
+/**
+ * Turn handler: receives the recorded audio + country code, must run the
+ * STT → LLM → append pipeline and return the reply text for speaking.
+ */
+export type LiveTurnHandler = (audio: Blob, countryCode: string) => Promise<string>;
+
+const SILENCE_DB = 0.045; // RMS threshold for barge-in detection
+
+export function useLiveMode(onTurn: LiveTurnHandler, countryCode: string): LiveMode {
   const [active, setActive] = useState(false);
   const [listening, setListening] = useState(false);
   const [speaking, setSpeaking] = useState(false);
-  const [interim, setInterim] = useState("");
+  const [processing, setProcessing] = useState(false);
+  const [level, setLevel] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
-  const recRef = useRef<SpeechRecognitionLike | null>(null);
   const activeRef = useRef(false);
   const speakingRef = useRef(false);
+  const processingRef = useRef(false);
   const onTurnRef = useRef(onTurn);
   onTurnRef.current = onTurn;
+  const countryRef = useRef(countryCode);
+  countryRef.current = countryCode;
 
-  const startListening = useCallback(() => {
-    const rec = recRef.current;
-    if (!rec || speakingRef.current || !activeRef.current) return;
-    try {
-      rec.start();
-      setListening(true);
-    } catch {
-      // start() throws if already started — ignore
-    }
-  }, []);
+  // Recording machinery
+  const streamRef = useRef<MediaStream | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const levelRafRef = useRef<number | null>(null);
+  const levelTimerRef = useRef<number | null>(null);
+  const silenceStartRef = useRef<number | null>(null);
+  const bargeInRef = useRef(false);
 
-  const stop = useCallback(() => {
-    activeRef.current = false;
-    setActive(false);
-    setListening(false);
-    setInterim("");
-    window.speechSynthesis?.cancel();
-    speakingRef.current = false;
-    setSpeaking(false);
-    recRef.current?.abort();
-    recRef.current = null;
-  }, []);
+  const country = getCountry(countryCode);
 
-  const start = useCallback(() => {
-    setError(null);
+  // ------------------------------------------------------------------
+  // Mic level monitoring + barge-in (interrupt Jarvis by speaking)
+  // ------------------------------------------------------------------
+  const startLevelMonitor = useCallback(() => {
+    const analyser = analyserRef.current;
+    if (!analyser) return;
+    const buf = new Float32Array(analyser.fftSize);
 
-    if (typeof window !== "undefined" && !window.isSecureContext) {
-      setError("Live mode needs a secure connection — open this app over HTTPS.");
-      return;
-    }
-    const Ctor = getRecognitionCtor();
-    if (!Ctor) {
-      setError(
-        "Live mode needs Chrome or Edge (speech recognition isn't available in this browser).",
-      );
-      return;
-    }
-    if (!("speechSynthesis" in window)) {
-      setError("Speech output isn't supported in this browser.");
-      return;
-    }
+    const tick = () => {
+      if (!activeRef.current) return;
+      analyser.getFloatTimeDomainData(buf);
+      let sum = 0;
+      for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+      const rms = Math.sqrt(sum / buf.length);
+      setLevel(Math.min(1, rms * 6));
 
-    const rec = new Ctor();
-    rec.continuous = false; // one utterance at a time — cleaner turn-taking
-    rec.interimResults = true;
-    rec.lang = navigator.language || "en-US";
-
-    rec.onresult = (e) => {
-      let finalText = "";
-      let interimText = "";
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const res = e.results[i];
-        if (res.isFinal) {
-          finalText += res[0].transcript;
+      // While Jarvis speaks, watch for the user talking over him
+      if (speakingRef.current) {
+        if (rms > SILENCE_DB) {
+          if (silenceStartRef.current === null) {
+            silenceStartRef.current = Date.now();
+          } else if (Date.now() - silenceStartRef.current > 350) {
+            // 350ms of sustained voice → interrupt
+            bargeInRef.current = true;
+            window.speechSynthesis.cancel();
+          }
         } else {
-          interimText += res[0].transcript;
+          silenceStartRef.current = null;
         }
       }
-      setInterim(interimText);
-      if (finalText.trim()) {
-        setInterim("");
-        setListening(false);
-        // Hand the turn to the app pipeline
-        onTurnRef.current(finalText.trim());
-      }
+      levelRafRef.current = requestAnimationFrame(tick);
     };
+    levelRafRef.current = requestAnimationFrame(tick);
+  }, []);
 
-    rec.onerror = (e) => {
-      if (e.error === "not-allowed" || e.error === "service-not-allowed") {
-        setError("Microphone access denied. Allow mic access and retry.");
-        activeRef.current = false;
-        setActive(false);
-      } else if (e.error === "no-speech") {
-        // silence — restart happens in onend
-      } else if (e.error !== "aborted") {
-        setError(`Voice error: ${e.error}`);
-      }
-    };
+  const stopLevelMonitor = useCallback(() => {
+    if (levelRafRef.current !== null) {
+      cancelAnimationFrame(levelRafRef.current);
+      levelRafRef.current = null;
+    }
+    setLevel(0);
+  }, []);
 
-    rec.onend = () => {
-      setListening(false);
-      // Auto-restart unless Jarvis is speaking or the user stopped live mode
-      if (activeRef.current && !speakingRef.current) {
-        window.setTimeout(() => startListening(), 350);
-      }
-    };
+  // ------------------------------------------------------------------
+  // Recording → Whisper STT
+  // ------------------------------------------------------------------
+  const startRecording = useCallback(() => {
+    const stream = streamRef.current;
+    if (!stream || speakingRef.current || processingRef.current || !activeRef.current) return;
 
-    recRef.current = rec;
-    activeRef.current = true;
-    setActive(true);
-    startListening();
-  }, [startListening]);
+    try {
+      const mime = MediaRecorder.isTypeSupported("audio/webm")
+        ? "audio/webm"
+        : MediaRecorder.isTypeSupported("audio/mp4")
+          ? "audio/mp4"
+          : "";
+      const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      chunksRef.current = [];
+      rec.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      rec.onstop = async () => {
+        const blob = new Blob(chunksRef.current, { type: rec.mimeType || "audio/webm" });
+        chunksRef.current = [];
+        if (blob.size < 3000 || !activeRef.current) {
+          // too short / stopped — resume listening
+          window.setTimeout(() => startRecording(), 300);
+          return;
+        }
+        processingRef.current = true;
+        setProcessing(true);
+        try {
+          await onTurnRef.current(blob, countryRef.current);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : "Transcription failed.");
+        } finally {
+          processingRef.current = false;
+          setProcessing(false);
+          // Resume listening after the turn completes (reply delivery also
+          // triggers resume via deliverReply → utterance end)
+          if (!speakingRef.current && activeRef.current) {
+            window.setTimeout(() => startRecording(), 400);
+          }
+        }
+      };
+      rec.start();
+      recorderRef.current = rec;
+      setListening(true);
+      setError(null);
+    } catch {
+      setError("Could not start recording.");
+    }
+  }, []);
 
-  const deliverReply = useCallback(
-    (text: string) => {
-      if (!activeRef.current || !text.trim()) {
-        // Live mode off or empty reply — just resume listening
-        if (activeRef.current) window.setTimeout(() => startListening(), 200);
+  const stopRecording = useCallback(() => {
+    if (recorderRef.current?.state === "recording") {
+      recorderRef.current.stop();
+    }
+    setListening(false);
+  }, []);
+
+  // ------------------------------------------------------------------
+  // Speak a reply via browser TTS with a country-matched voice
+  // ------------------------------------------------------------------
+  const pickVoice = useCallback((): SpeechSynthesisVoice | null => {
+    const synth = window.speechSynthesis;
+    if (!synth) return null;
+    const voices = synth.getVoices();
+    const tag = countryRef.current ? getCountry(countryRef.current).langTag : "en-US";
+    const langPrefix = tag.split("-")[0];
+    return (
+      voices.find((v) => v.lang === tag) ??
+      voices.find((v) => v.lang.startsWith(langPrefix)) ??
+      voices.find((v) => v.lang.startsWith("en")) ??
+      null
+    );
+  }, []);
+
+  const speakReply = useCallback(
+    (text: string, onDone: () => void) => {
+      const synth = window.speechSynthesis;
+      if (!synth) {
+        onDone();
         return;
       }
-      // Strip markdown/math syntax for cleaner speech
+      // Strip markdown/math for clean speech
       const spoken = text
         .replace(/```[\s\S]*?```/g, " (code block) ")
         .replace(/\$\$[\s\S]*?\$\$/g, " (equation) ")
@@ -186,33 +209,134 @@ export function useLiveMode(onTurn: (text: string) => void): LiveMode {
         .trim()
         .slice(0, 1200);
 
-      const synth = window.speechSynthesis;
       synth.cancel();
-      const utter = new SpeechSynthesisUtterance(spoken);
-      utter.rate = 1.05;
-      utter.onstart = () => {
-        speakingRef.current = true;
-        setSpeaking(true);
-        recRef.current?.abort(); // don't hear ourselves
-        setListening(false);
-      };
-      utter.onend = () => {
-        speakingRef.current = false;
-        setSpeaking(false);
-        if (activeRef.current) {
-          window.setTimeout(() => startListening(), 400);
+      bargeInRef.current = false;
+      silenceStartRef.current = null;
+
+      // Long replies: chunk into sentences so cancel() responds quickly
+      const sentences = spoken.match(/[^.!?。]+[.!?。]*/g) ?? [spoken];
+      const utterances = sentences.map((s) => {
+        const u = new SpeechSynthesisUtterance(s.trim());
+        const voice = pickVoice();
+        if (voice) {
+          u.voice = voice;
+          u.lang = voice.lang;
+        } else {
+          u.lang = countryRef.current ? getCountry(countryRef.current).langTag : "en-US";
         }
-      };
-      utter.onerror = () => {
-        speakingRef.current = false;
-        setSpeaking(false);
-        if (activeRef.current) {
-          window.setTimeout(() => startListening(), 400);
-        }
-      };
-      synth.speak(utter);
+        u.rate = 1.05;
+        return u;
+      });
+
+      utterances.forEach((u, i) => {
+        u.onstart = () => {
+          speakingRef.current = true;
+          setSpeaking(true);
+        };
+        u.onend = () => {
+          const isLast = i === utterances.length - 1;
+          const interrupted = bargeInRef.current;
+          if (interrupted || isLast) {
+            speakingRef.current = false;
+            setSpeaking(false);
+            onDone();
+          }
+        };
+        u.onerror = () => {
+          speakingRef.current = false;
+          setSpeaking(false);
+          onDone();
+        };
+        synth.speak(u);
+      });
+
+      if (utterances.length === 0) onDone();
     },
-    [startListening],
+    [pickVoice],
+  );
+
+  // ------------------------------------------------------------------
+  // Public API
+  // ------------------------------------------------------------------
+  const stop = useCallback(() => {
+    activeRef.current = false;
+    setActive(false);
+    setListening(false);
+    setProcessing(false);
+    speakingRef.current = false;
+    setSpeaking(false);
+    stopLevelMonitor();
+    window.speechSynthesis?.cancel();
+    stopRecording();
+    recorderRef.current = null;
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    void audioCtxRef.current?.close().catch(() => {});
+    audioCtxRef.current = null;
+    analyserRef.current = null;
+  }, [stopLevelMonitor, stopRecording]);
+
+  const start = useCallback(async () => {
+    setError(null);
+
+    if (typeof window !== "undefined" && !window.isSecureContext) {
+      setError("Live mode needs a secure connection — open this app over HTTPS.");
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setError("Voice isn't supported in this browser.");
+      return;
+    }
+    if (!("speechSynthesis" in window)) {
+      setError("Speech output isn't supported in this browser.");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+
+      // Set up the analyser for level monitoring + barge-in
+      const Ctx =
+        window.AudioContext ??
+        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const ctx = new Ctx();
+      audioCtxRef.current = ctx;
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      source.connect(analyser);
+      analyserRef.current = analyser;
+
+      activeRef.current = true;
+      setActive(true);
+      startLevelMonitor();
+      startRecording();
+    } catch {
+      setError("Microphone access denied. Allow mic access and retry.");
+    }
+  }, [startLevelMonitor, startRecording]);
+
+  const deliverReply = useCallback(
+    (text: string) => {
+      if (!activeRef.current) return;
+      if (!text.trim()) {
+        if (!speakingRef.current) window.setTimeout(() => startRecording(), 300);
+        return;
+      }
+      // Pause the mic while Jarvis talks
+      stopRecording();
+      speakReply(text, () => {
+        if (activeRef.current && !bargeInRef.current) {
+          window.setTimeout(() => startRecording(), 400);
+        } else if (bargeInRef.current) {
+          // Interrupted — listen again immediately
+          bargeInRef.current = false;
+          window.setTimeout(() => startRecording(), 150);
+        }
+      });
+    },
+    [speakReply, startRecording, stopRecording],
   );
 
   // Cleanup on unmount
@@ -220,10 +344,11 @@ export function useLiveMode(onTurn: (text: string) => void): LiveMode {
     () => () => {
       activeRef.current = false;
       window.speechSynthesis?.cancel();
-      recRef.current?.abort();
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      if (levelRafRef.current !== null) cancelAnimationFrame(levelRafRef.current);
     },
     [],
   );
 
-  return { active, listening, speaking, interim, error, start, stop, deliverReply };
+  return { active, listening, speaking, processing, level, error, start, stop, deliverReply };
 }

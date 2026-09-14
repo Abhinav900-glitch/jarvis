@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { Link } from "react-router";
 import { JarvisIcon } from "@/components/jarvis-icon";
+import { AUTHOR } from "@/lib/languages";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { useAuth } from "@/hooks/use-auth";
@@ -239,9 +240,12 @@ export default function Landing() {
 
       {/* Footer */}
       <footer className="mt-auto border-t">
-        <div className="mx-auto flex w-full max-w-5xl items-center justify-between px-6 py-6 text-xs text-muted-foreground">
+        <div className="mx-auto flex w-full max-w-5xl flex-col gap-2 px-6 py-6 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
           <Wordmark />
           <span>Version 1 — Chat · Deep Research · Auto-fallback</span>
+          <span className="inline-flex items-center gap-1.5">
+            {AUTHOR.flag} Built by <span className="font-medium text-foreground">{AUTHOR.name}</span> · {AUTHOR.country}
+          </span>
         </div>
       </footer>
     </motion.div>
