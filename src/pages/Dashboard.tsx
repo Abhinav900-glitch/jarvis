@@ -842,6 +842,74 @@ export default function Dashboard() {
     }
   };
 
+
+  // ---- Natural-language image gen: stores msg, generates, sends result ----
+  const runImageGenerationMessage = async (prompt: string, originalText: string) => {
+    setSending(true);
+    setAssistantError(null);
+    setInput("");
+    if (recorder.recording) recorder.stop();
+
+    try {
+      let sessionId: Id<"chatSessions">;
+      let history: { role: string; content: string }[] = [];
+      if (!activeId) {
+        const { sessionId: sid } = await startWithMessage({ content: originalText });
+        sessionId = sid;
+        setActiveId(sid);
+      } else {
+        sessionId = activeId;
+        await appendMessage({ sessionId, role: "user", content: originalText });
+        history = (messages ?? []).slice(-12).map((m) => ({
+          role: m.role,
+          content: m.content,
+        }));
+      }
+
+      setGenerating(true);
+      let generated: { url: string; publicId: string; provider: string } | null = null;
+      let genError: string | null = null;
+      try {
+        generated = await generateImageAction({ prompt });
+      } catch (err) {
+        genError = err instanceof Error ? err.message : "Image generation failed.";
+      }
+      setGenerating(false);
+
+      // Attach the generated image and send it as an assistant message
+      if (generated) {
+        await appendMessage({
+          sessionId,
+          role: "assistant",
+          content: `Generated image: **${prompt}**`,
+          model: generated.provider.startsWith("hf/") ? "huggingface" : generated.provider,
+          imageUrl: generated.url,
+          imagePublicId: generated.publicId,
+          images: [{ url: generated.url, publicId: generated.publicId }],
+        });
+      } else {
+        // All providers failed — have the LLM acknowledge gracefully
+        const answer = await askAction({
+          prompt: `The user asked me to generate an image of "${prompt}" but the image service failed (${genError}). Apologize briefly and suggest they try again or rephrase.`,
+          history,
+        });
+        await appendMessage({
+          sessionId,
+          role: "assistant",
+          content: answer.text,
+          model: answer.model,
+          usedFallback: answer.usedFallback,
+        });
+      }
+    } catch (err) {
+      setAssistantError(err instanceof Error ? err.message : "Image message failed.");
+    } finally {
+      setGenerating(false);
+      setSending(false);
+      inputRef.current?.focus();
+    }
+  };
+
   const runSendWithText = async (overrideText?: string) => {
     const text = (overrideText ?? input).trim();
     if ((!text && pendingImages.length === 0 && !pendingFile) || sending)
@@ -863,6 +931,18 @@ export default function Dashboard() {
     const effectiveText = editingId || deepResearch || pendingImages.length > 0 || pendingFile
       ? text
       : `${text}\n\n[System: ${countryPersona}]`;
+
+    // Natural-language image generation: "generate an image of..." etc.
+    if (!editingId && text && pendingImages.length === 0 && !pendingFile && !deepResearch) {
+      const imgIntent = text.match(
+        /^\s*(?:please\s+)?(?:generate|create|make|draw|paint|render|give)\s+(?:me\s+)?(?:an?|the)??\s*(?:ai\s+)?(?:image|picture|photo|artwork|drawing|painting|illustration)\s*(?:of|showing|with|about|for)?\s*[:]?\s*([\s\S]{3,400})/i,
+      );
+      if (imgIntent?.[1]) {
+        const prompt = imgIntent[1].replace(/[.?!]+$/, "").trim();
+        await runImageGenerationMessage(prompt, text);
+        return;
+      }
+    }
 
     // Natural-language weather: fetch live data directly, no slash command needed
     if (!editingId && text && pendingImages.length === 0 && !pendingFile) {

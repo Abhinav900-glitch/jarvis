@@ -370,7 +370,7 @@ async function hfImageRequest(
           guidance_scale: guidance,
         },
       }),
-      signal: AbortSignal.timeout(120_000),
+      signal: AbortSignal.timeout(60_000),
     },
   );
 
@@ -454,13 +454,15 @@ async function generateViaPollinations(
   const encoded = encodeURIComponent(prompt.slice(0, 800));
   const pollinationsUrl = `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024&nologo=true&model=flux&seed=${Date.now()}`;
 
-  // GET with retries — generation can be slow or briefly rate-limited
+  // GET with retries — generation can be slow or briefly rate-limited.
+  // Keep total time bounded: Convex actions have a hard time limit, so the
+  // whole fallback chain must finish well under it.
   let bytes: ArrayBuffer | null = null;
   let lastStatus: number | string = "network error";
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const res = await fetch(pollinationsUrl, {
-        signal: AbortSignal.timeout(90_000),
+        signal: AbortSignal.timeout(45_000),
       });
       const ct = res.headers.get("content-type") ?? "";
       if (res.ok && ct.startsWith("image/")) {
@@ -476,7 +478,7 @@ async function generateViaPollinations(
     } catch (err) {
       lastStatus = err instanceof Error ? err.message : "network error";
     }
-    if (attempt < 2) await new Promise((r) => setTimeout(r, 2500 * (attempt + 1)));
+    if (attempt < 1) await new Promise((r) => setTimeout(r, 2000));
   }
   if (!bytes) {
     throw new Error(`Pollinations generation failed (${lastStatus})`);
