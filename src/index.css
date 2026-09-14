@@ -231,6 +231,108 @@
   border-radius: var(--radius-sm);
 }
 
+/* ---------------------------------------------------------------------------
+   JarvisOrb — gyroscope thinking animation
+   Three layers: outer ring (clockwise, slow), inner ring (counter-clockwise,
+   faster), and a breathing core. Satellite dots ride the rings.
+   --------------------------------------------------------------------------- */
+
+.jarvis-orb {
+  --orb-color: currentColor;
+}
+
+.jarvis-orb-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+}
+
+.jarvis-orb-ring-outer {
+  border: 1px solid color-mix(in srgb, var(--orb-color) 45%, transparent);
+  animation: jarvis-orb-spin-cw 3.2s linear infinite;
+}
+
+.jarvis-orb-ring-inner {
+  position: absolute;
+  inset: 18%;
+  border-top: 1.5px solid color-mix(in srgb, var(--orb-color) 80%, transparent);
+  border-right: 1px solid color-mix(in srgb, var(--orb-color) 25%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--orb-color) 25%, transparent);
+  border-left: 1px solid color-mix(in srgb, var(--orb-color) 25%, transparent);
+  border-radius: 9999px;
+  animation: jarvis-orb-spin-ccw 1.9s linear infinite;
+}
+
+.jarvis-orb-core {
+  position: absolute;
+  inset: 38%;
+  border-radius: 9999px;
+  background: var(--orb-color);
+  animation: jarvis-orb-breathe 2.2s ease-in-out infinite;
+}
+
+.jarvis-orb-satellite {
+  position: absolute;
+  border-radius: 9999px;
+  background: var(--orb-color);
+}
+
+.jarvis-orb-satellite-a {
+  width: 15%;
+  height: 15%;
+  top: -7.5%;
+  left: calc(50% - 7.5%);
+}
+
+.jarvis-orb-satellite-b {
+  width: 18%;
+  height: 18%;
+  bottom: -9%;
+  left: calc(50% - 9%);
+}
+
+@keyframes jarvis-orb-spin-cw {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes jarvis-orb-spin-ccw {
+  from {
+    transform: rotate(360deg);
+  }
+  to {
+    transform: rotate(0deg);
+  }
+}
+
+@keyframes jarvis-orb-breathe {
+  0%,
+  100% {
+    transform: scale(0.72);
+    opacity: 0.55;
+  }
+  50% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* Respect reduced-motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  .jarvis-orb-ring-outer,
+  .jarvis-orb-ring-inner {
+    animation-duration: 12s;
+  }
+  .jarvis-orb-core {
+    animation: none;
+    opacity: 0.8;
+  }
+}
+
 /* KaTeX math rendering */
 .md-body .katex {
   font-size: 1.06em;

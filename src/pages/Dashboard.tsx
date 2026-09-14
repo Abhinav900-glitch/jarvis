@@ -22,7 +22,6 @@ import {
   RotateCcw,
   Search,
   Settings,
-  Sparkles,
   Square,
   Sun,
   Trash2,
@@ -38,6 +37,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { JarvisIcon } from "@/components/jarvis-icon";
+import { JarvisOrb } from "@/components/jarvis-orb";
 import { Lightbox } from "@/components/lightbox";
 import { MarkdownMessage } from "@/components/markdown-message";
 import { Button } from "@/components/ui/button";
@@ -1719,17 +1719,8 @@ export default function Dashboard() {
           <div ref={scrollRef} className="flex-1 overflow-y-auto">
             {!messages || messages.length === 0 ? (
               <div className="mx-auto flex h-full max-w-2xl flex-col items-center justify-center px-6">
-                <div className="relative">
-                  <div className="animate-[spin_8s_linear_infinite]">
-                    <JarvisIcon className="size-14 text-muted-foreground/20" />
-                  </div>
-                  <motion.div
-                    className="absolute inset-0 flex items-center justify-center"
-                    animate={{ scale: [1, 1.1, 1], opacity: [0.3, 0.6, 0.3] }}
-                    transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
-                  >
-                    <Sparkles className="size-5 text-muted-foreground/40" strokeWidth={1.5} />
-                  </motion.div>
+                <div className="text-muted-foreground/50">
+                  <JarvisOrb size={72} />
                 </div>
                 <h1 className="mt-6 text-2xl font-semibold tracking-tight">
                   How can I help?
@@ -1969,10 +1960,10 @@ export default function Dashboard() {
                     </li>
                   ))}
                   {sending && (
-                    <li className="flex items-center gap-2.5 text-sm text-muted-foreground">
-                      <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-accent">
-                        <Loader2 className="size-3.5 animate-spin" />
-                      </div>
+                    <li className="flex items-center gap-2.5 py-1 text-sm text-muted-foreground">
+                      <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-accent text-foreground">
+                        <JarvisOrb size={18} />
+                      </span>
                       {deepResearch
                         ? "Searching the web, then thinking…"
                         : "Thinking…"}
