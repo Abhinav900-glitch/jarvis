@@ -83,6 +83,14 @@ const schema = defineSchema(
       createdAt: v.number(),
     }).index("by_session", ["sessionId"]),
 
+    // Saved prompt library (per user)
+    prompts: defineTable({
+      userId: v.id("users"),
+      title: v.string(),
+      content: v.string(),
+      createdAt: v.number(),
+    }).index("by_user", ["userId"]),
+
     // Cloudinary OAuth 2.0 connection (one row per user)
     cloudinaryAuth: defineTable({
       userId: v.id("users"),

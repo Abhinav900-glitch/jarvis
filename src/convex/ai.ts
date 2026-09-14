@@ -786,3 +786,88 @@ export const getCountryInfo = action({
     };
   },
 });
+
+// ---------------------------------------------------------------------------
+// AI-generated chat titles
+// ---------------------------------------------------------------------------
+
+export const generateTitle = action({
+  args: {
+    firstMessage: v.string(),
+  },
+  handler: async (_ctx, args): Promise<{ title: string }> => {
+    const groqKey = process.env.GROQ_API_KEY;
+    if (!groqKey) {
+      // Graceful fallback: truncate
+      const t = args.firstMessage.trim().slice(0, 50);
+      return { title: t.length < args.firstMessage.trim().length ? `${t}…` : t };
+    }
+
+    try {
+      const res = await fetch(
+        "https://api.groq.com/openai/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${groqKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "llama-3.1-8b-instant",
+            messages: [
+              {
+                role: "system",
+                content:
+                  "Generate a concise chat title (3-6 words) for the user's message. Reply with ONLY the title, no quotes, no punctuation at the end.",
+              },
+              { role: "user", content: args.firstMessage.slice(0, 500) },
+            ],
+            temperature: 0.3,
+            max_tokens: 20,
+          }),
+        },
+      );
+
+      if (res.ok) {
+        const data = (await res.json()) as {
+          choices?: { message?: { content?: string } }[];
+        };
+        const title = data.choices?.[0]?.message?.content?.trim();
+        if (title) return { title: title.slice(0, 60) };
+      }
+    } catch {
+      // fall through to truncation
+    }
+
+    const t = args.firstMessage.trim().slice(0, 50);
+    return { title: t.length < args.firstMessage.trim().length ? `${t}…` : t };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// PDF text extraction (unpdf — pure JS, works in Convex node runtime)
+// ---------------------------------------------------------------------------
+
+export const extractPdfText = action({
+  args: { url: v.string() },
+  handler: async (_ctx, args): Promise<{ text: string; pages: number }> => {
+    const res = await fetch(args.url, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; JarvisBot/1.0)" },
+    });
+    if (!res.ok) throw new Error(`Failed to download PDF (${res.status}).`);
+
+    const buffer = await res.arrayBuffer();
+    const { extractText, getDocumentProxy } = await import("unpdf");
+    const pdf = await getDocumentProxy(new Uint8Array(buffer));
+    const { text, totalPages } = await extractText(pdf, { mergePages: true });
+
+    const clean = text.replace(/\s+/g, " ").trim();
+    if (!clean) {
+      throw new Error(
+        "No extractable text found in this PDF (it may be scanned images).",
+      );
+    }
+
+    return { text: clean.slice(0, 60_000), pages: totalPages };
+  },
+});

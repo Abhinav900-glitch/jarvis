@@ -14,6 +14,7 @@ import {
   Link2,
   Mic,
   Menu,
+  Moon,
   Newspaper,
   Pencil,
   Paperclip,
@@ -23,6 +24,7 @@ import {
   Settings,
   Sparkles,
   Square,
+  Sun,
   Trash2,
   User,
   Volume2,
@@ -31,6 +33,7 @@ import {
   X,
   Zap,
   Home,
+  Bookmark,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
@@ -369,6 +372,12 @@ export default function Dashboard() {
   const getCountryInfoAction = useAction(api.ai.getCountryInfo);
   const getOAuthStartUrlAction = useAction(api.cloudinary.getOAuthStartUrl);
   const disconnectCloudinaryAction = useAction(api.cloudinary.disconnectCloudinary);
+  const generateTitleAction = useAction(api.ai.generateTitle);
+  const extractPdfTextAction = useAction(api.ai.extractPdfText);
+  const renameSessionMutation = useMutation(api.chats.renameSession);
+  const savePromptMutation = useMutation(api.chats.savePrompt);
+  const deletePromptMutation = useMutation(api.chats.deletePrompt);
+  const promptsList = useQuery(api.chats.listPrompts);
 
   // Cloudinary OAuth connection status (live query)
   const cloudinaryStatus = useQuery(api.cloudinaryOAuth.getStatus);
@@ -410,6 +419,9 @@ export default function Dashboard() {
   const [regionBusy, setRegionBusy] = useState(false);
   const [showCalculator, setShowCalculator] = useState(false);
   const [cloudinaryConnecting, setCloudinaryConnecting] = useState(false);
+  const [showPrompts, setShowPrompts] = useState(false);
+  const [isDark, setIsDark] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(false);
 
   const editMessage = useMutation(api.chats.editMessage);
   const searchSessionsQuery = useQuery(
@@ -694,6 +706,13 @@ export default function Dashboard() {
     if ((!text && pendingImages.length === 0 && !pendingFile) || sending)
       return;
 
+    // PDF attachments route through the document-Q&A flow (extract text + ask)
+    if (pendingFile && /pdf/.test(pendingFile.type)) {
+      setInput("");
+      await handlePdfQuestion(text);
+      return;
+    }
+
     setSending(true);
     setAssistantError(null);
     setPanelNlp(null);
@@ -935,6 +954,142 @@ export default function Dashboard() {
         err instanceof Error ? err.message : "Failed to disconnect Cloudinary.",
       );
     }
+  };
+
+  // ---- Dark mode toggle (persisted) ----
+  const toggleTheme = () => {
+    const next = !isDark;
+    setIsDark(next);
+    document.documentElement.classList.toggle("dark", next);
+    try {
+      localStorage.setItem("jarvis-theme", next ? "dark" : "light");
+    } catch {
+      // ignore storage errors
+    }
+  };
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("jarvis-theme");
+      if (saved === "dark") {
+        setIsDark(true);
+        document.documentElement.classList.add("dark");
+      }
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+
+  // ---- AI-generated chat titles: run once after the first exchange ----
+  const titleGeneratedFor = useRef<Id<"chatSessions"> | null>(null);
+  useEffect(() => {
+    if (
+      !activeId ||
+      sending ||
+      !messages ||
+      messages.length < 2 ||
+      titleGeneratedFor.current === activeId
+    )
+      return;
+    const firstUser = messages.find((m) => m.role === "user");
+    if (!firstUser || firstUser.content.startsWith("[Image]")) return;
+    titleGeneratedFor.current = activeId;
+    void generateTitleAction({ firstMessage: firstUser.content })
+      .then(({ title }) => renameSessionMutation({ sessionId: activeId, title }))
+      .catch(() => {
+        // silent — truncation fallback already applied server-side
+      });
+  }, [activeId, messages, sending, generateTitleAction, renameSessionMutation]);
+
+  // ---- PDF Q&A: extract text from a PDF and ask Jarvis about it ----
+  const handlePdfQuestion = async (question: string) => {
+    if (!pendingFile || pdfBusy) return;
+    const file = pendingFile;
+    setPdfBusy(true);
+    setAssistantError(null);
+    const userQuestion = question || "Summarize this document";
+    setPendingFile(null);
+    try {
+      const { text, pages } = await extractPdfTextAction({ url: file.url });
+
+      // Build a session if needed
+      let sessionId: Id<"chatSessions">;
+      let history: { role: string; content: string }[] = [];
+      if (!activeId) {
+        const { sessionId: sid } = await startWithMessage({
+          content: `[PDF: ${file.name}] ${userQuestion}`,
+          fileUrl: file.url,
+          fileName: file.name,
+          fileType: file.type,
+          fileSize: file.size,
+        });
+        sessionId = sid;
+        setActiveId(sid);
+      } else {
+        sessionId = activeId;
+        await appendMessage({
+          sessionId,
+          role: "user",
+          content: `[PDF: ${file.name}] ${userQuestion}`,
+          fileUrl: file.url,
+          fileName: file.name,
+          fileType: file.type,
+          fileSize: file.size,
+        });
+        history = (messages ?? []).map((m) => ({
+          role: m.role,
+          content: m.content,
+        }));
+      }
+
+      const answer = await askAction({
+        prompt:
+          `A user uploaded a PDF document (${file.name}, ${pages} pages). ` +
+          `Here is its extracted text:\n\n<document>\n${text}\n</document>\n\n` +
+          `The user asks: ${userQuestion}\n\n` +
+          "Answer grounded ONLY in the document. If the answer isn't in the document, say so.",
+        history,
+      });
+
+      await appendMessage({
+        sessionId,
+        role: "assistant",
+        content: answer.text,
+        model: answer.model,
+        usedFallback: answer.usedFallback,
+        usedSearch: false,
+      });
+      setPendingFile(null);
+    } catch (err) {
+      setAssistantError(
+        err instanceof Error ? err.message : "PDF analysis failed.",
+      );
+    } finally {
+      setPdfBusy(false);
+    }
+  };
+
+  // ---- Prompt library ----
+  const [promptTitle, setPromptTitle] = useState("");
+  const handleSavePrompt = async () => {
+    const content = input.trim();
+    if (!content) return;
+    try {
+      await savePromptMutation({
+        title: promptTitle.trim() || content.slice(0, 40),
+        content,
+      });
+      toast.success("Prompt saved to library.");
+      setPromptTitle("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to save prompt.");
+    }
+  };
+
+  const handleUsePrompt = (content: string) => {
+    setInput(content);
+    setShowPrompts(false);
+    inputRef.current?.focus();
   };
 
   // --- Export chat as Markdown ---
@@ -1364,6 +1519,18 @@ export default function Dashboard() {
                     ) : null}
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => { setShowPrompts((v) => !v); setShowSearch(false); }}>
+                    <Bookmark className="size-4" />
+                    Prompt library
+                    {showPrompts ? (
+                      <Check className="ml-auto size-4" />
+                    ) : null}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={toggleTheme}>
+                    {isDark ? <Sun className="size-4" /> : <Moon className="size-4" />}
+                    {isDark ? "Light mode" : "Dark mode"}
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={handleConnectCloudinary} disabled={cloudinaryConnecting || cloudinaryStatus?.connected}>
                     <Link2 className="size-4" />
                     {cloudinaryStatus?.connected
@@ -1576,6 +1743,20 @@ export default function Dashboard() {
                             <Pencil className="size-3" />
                           </button>
                         )}
+                        {m.role === "assistant" && m._id === lastMsg?._id && !sending && (
+                          <button
+                            onClick={() => {
+                              const prevUser = [...(messages ?? [])]
+                                .reverse()
+                                .find((x) => x.role === "user");
+                              if (prevUser) void handleEditMessage(prevUser._id, prevUser.content);
+                            }}
+                            title="Regenerate this reply"
+                            className="rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+                          >
+                            <RotateCcw className="size-3" />
+                          </button>
+                        )}
                         {m.role === "assistant" && (
                           <span className="ml-auto flex items-center gap-2 text-[10px] text-muted-foreground">
                             {m.usedSearch || m.usedFallback ? (
@@ -1786,6 +1967,68 @@ export default function Dashboard() {
             )}
           </AnimatePresence>
 
+          {/* ---- Prompt library panel ---- */}
+          <AnimatePresence>
+            {showPrompts && (
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 8 }}
+                transition={{ duration: 0.2 }}
+                className="border-t px-6 py-3"
+              >
+                <div className="mx-auto max-w-2xl">
+                  <div className="mb-2 flex items-center gap-2">
+                    <Bookmark className="size-3.5 text-muted-foreground" />
+                    <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">Prompt library</span>
+                    <button onClick={() => setShowPrompts(false)} className="ml-auto rounded p-0.5 text-muted-foreground hover:text-foreground">
+                      <X className="size-3" />
+                    </button>
+                  </div>
+                  <div className="mb-2 flex gap-2">
+                    <input
+                      value={promptTitle}
+                      onChange={(e) => setPromptTitle(e.target.value)}
+                      placeholder="Prompt title (optional)"
+                      className="w-44 rounded-lg border bg-transparent px-3 py-2 text-xs outline-none placeholder:text-muted-foreground/50 focus:border-foreground/30"
+                    />
+                    <button
+                      onClick={() => void handleSavePrompt()}
+                      disabled={!input.trim()}
+                      className="rounded-lg border px-3 py-2 text-xs font-medium transition-colors hover:bg-accent disabled:opacity-40"
+                    >
+                      Save current input
+                    </button>
+                  </div>
+                  <div className="max-h-48 space-y-1.5 overflow-y-auto">
+                    {promptsList && promptsList.length > 0 ? (
+                      promptsList.map((p) => (
+                        <div key={p._id} className="group flex items-center gap-2 rounded-md border border-border/60 px-3 py-2">
+                          <button
+                            onClick={() => handleUsePrompt(p.content)}
+                            className="min-w-0 flex-1 text-left text-xs transition-colors hover:text-foreground"
+                          >
+                            <span className="block truncate font-medium">{p.title}</span>
+                            <span className="block truncate text-muted-foreground">{p.content}</span>
+                          </button>
+                          <button
+                            onClick={() => void deletePromptMutation({ promptId: p._id })}
+                            className="rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
+                            aria-label="Delete prompt"
+                          >
+                            <Trash2 className="size-3" />
+                          </button>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-xs text-muted-foreground">No saved prompts yet. Type a prompt, then save it.</p>
+                    )}
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           {/* ---- Region result panel ---- */}
           <AnimatePresence>
             {(regionResult || regionBusy) && (
@@ -1934,6 +2177,16 @@ export default function Dashboard() {
                         <span className="shrink-0 text-[10px] text-muted-foreground">
                           {(pendingFile.size / 1024).toFixed(0)} KB
                         </span>
+                        {/pdf/.test(pendingFile.type) ? (
+                          <button
+                            onClick={() => void handlePdfQuestion("")}
+                            disabled={pdfBusy}
+                            className="shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
+                            title="Summarize this PDF with Jarvis"
+                          >
+                            {pdfBusy ? "Reading…" : "Summarize"}
+                          </button>
+                        ) : null}
                         <button
                           onClick={() => setPendingFile(null)}
                           className="shrink-0 rounded-full p-0.5 text-muted-foreground hover:text-foreground"

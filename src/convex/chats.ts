@@ -337,3 +337,49 @@ export const searchSessions = query({
     return { sessions: matchedSessions, messages: matchedMessages };
   },
 });
+
+// ---------------------------------------------------------------------------
+// Prompt library — save / list / use / delete reusable prompts
+// ---------------------------------------------------------------------------
+
+export const listPrompts = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) return [];
+    return await ctx.db
+      .query("prompts")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .order("desc")
+      .take(50);
+  },
+});
+
+export const savePrompt = mutation({
+  args: { title: v.string(), content: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) throw new Error("Sign in to save prompts.");
+
+    const title = args.title.trim() || args.content.trim().slice(0, 40);
+    await ctx.db.insert("prompts", {
+      userId,
+      title: title.slice(0, 80),
+      content: args.content.trim().slice(0, 4000),
+      createdAt: Date.now(),
+    });
+  },
+});
+
+export const deletePrompt = mutation({
+  args: { promptId: v.id("prompts") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) throw new Error("Not signed in.");
+
+    const prompt = await ctx.db.get(args.promptId);
+    if (!prompt || prompt.userId !== userId) throw new Error("Prompt not found.");
+
+    await ctx.db.delete(args.promptId);
+  },
+});
