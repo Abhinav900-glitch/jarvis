@@ -20,8 +20,10 @@ const EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2";
 export const EMBED_DIMS = 384;
 
 async function embedTexts(token: string, texts: string[]): Promise<number[][]> {
+  // api-inference.huggingface.co is retired — the Inference API lives on the
+  // router host now (verified live with this token).
   const res = await fetch(
-    `https://api-inference.huggingface.co/pipeline/feature-extraction/${EMBED_MODEL}`,
+    `https://router.huggingface.co/hf-inference/models/${EMBED_MODEL}/pipeline/feature-extraction`,
     {
       method: "POST",
       headers: {

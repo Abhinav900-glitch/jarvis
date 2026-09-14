@@ -208,10 +208,12 @@ async function callHuggingFace(
   token: string,
   turns: ChatTurn[],
 ): Promise<LlmResult> {
-  // Non-gated models first, so the fallback works on any HF token.
+  // Model availability verified live against the router for this token.
+  // (Qwen2.5-7B-1M / gemma-2-2b-it are NOT served for this account.)
   const models = [
-    { id: "Qwen/Qwen2.5-7B-Instruct-1M", label: "Qwen2.5-7B" },
-    { id: "google/gemma-2-2b-it", label: "Gemma-2-2B" },
+    { id: "meta-llama/Llama-3.1-8B-Instruct", label: "Llama-3.1-8B" },
+    { id: "Qwen/Qwen2.5-72B-Instruct", label: "Qwen2.5-72B" },
+    { id: "deepseek-ai/DeepSeek-V3-0324", label: "DeepSeek-V3" },
   ];
 
   const failures: string[] = [];
@@ -237,8 +239,9 @@ async function callHuggingFace(
         model: m.id,
         messages: [{ role: "system", content: JARVIS_PROMPT }, ...textTurns],
         temperature: 0.6,
-        max_tokens: 1500,
+        max_tokens: 4096,
       }),
+      signal: AbortSignal.timeout(45_000),
     });
     if (!res.ok) {
       failures.push(`${m.label} (${res.status})`);

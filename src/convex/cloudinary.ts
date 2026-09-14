@@ -354,8 +354,13 @@ async function hfImageRequest(
   steps: number,
   guidance: number,
 ): Promise<ArrayBuffer> {
+  // api-inference.huggingface.co is retired — Inference API lives on the
+  // router host now. NOTE (verified live): HF has deprecated/not-served every
+  // text-to-image model for this token, so this step fails in ~1s today and
+  // Pollinations takes over. It stays in the chain (fast-fail, 12s cap) so it
+  // auto-heals if an inference provider is ever enabled on the HF account.
   const res = await fetch(
-    `https://api-inference.huggingface.co/models/${model}`,
+    `https://router.huggingface.co/hf-inference/models/${model}`,
     {
       method: "POST",
       headers: {
@@ -370,7 +375,7 @@ async function hfImageRequest(
           guidance_scale: guidance,
         },
       }),
-      signal: AbortSignal.timeout(60_000),
+      signal: AbortSignal.timeout(12_000),
     },
   );
 
