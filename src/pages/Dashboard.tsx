@@ -39,7 +39,7 @@ import { Link, useNavigate } from "react-router";
 import { JarvisIcon } from "@/components/jarvis-icon";
 import { JarvisOrb } from "@/components/jarvis-orb";
 import { Lightbox } from "@/components/lightbox";
-import { MarkdownMessage } from "@/components/markdown-message";
+import { MarkdownMessage, looksLikeMathOrMarkdown } from "@/components/markdown-message";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -2169,9 +2169,15 @@ export default function Dashboard() {
                           {m.content &&
                           m.content !== "[Image]" &&
                           !m.content.startsWith("[File:") ? (
-                            <div className="text-sm leading-7 whitespace-pre-wrap text-foreground">
-                              {m.content}
-                            </div>
+                            looksLikeMathOrMarkdown(m.content) ? (
+                              <div className="md-body text-sm leading-7 text-foreground">
+                                <MarkdownMessage content={m.content} />
+                              </div>
+                            ) : (
+                              <div className="text-sm leading-7 whitespace-pre-wrap text-foreground">
+                                {m.content}
+                              </div>
+                            )
                           ) : null}
                         </div>
                       ) : (

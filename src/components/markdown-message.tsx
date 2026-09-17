@@ -61,7 +61,21 @@ function isLatexish(s: string): boolean {
 function stripMathArtifacts(input: string): string {
   return input
     .replace(/(\\[a-zA-Z]+)!/g, "$1")
-    .replace(/,\s*(d[a-zA-Z])(?![a-zA-Z])/g, "\\,$1");
+    .replace(/,\s*(d[a-zA-Z])(?![a-zA-Z])/g, "\\,$1")
+    .replace(/\\-/g, "-");
+}
+
+/**
+ * Clean up an inline TeX string before it is wrapped in single `$`:
+ *  - `&` is only valid inside aligned environments, so replace it with `\quad`
+ *    everywhere else (legacy table rows like `r &\approx -0.618`).
+ *  - Close any `\begin{env}` that never got its `\end{env}`.
+ */
+function sanitizeInlineTex(tex: string): string {
+  const cleaned = /\\begin\{(aligned|align|align\*|cases|gathered|split|array)\}/.test(tex)
+    ? tex
+    : tex.replace(/&/g, " \\quad ");
+  return repairMathBlock(cleaned);
 }
 
 /**
@@ -172,6 +186,159 @@ function normalizeMathDelimiters(input: string): string {
   flushBracket();
 
   return out.join("\n");
+}
+
+/**
+ * Commands the streaming model used to emit without their backslash (common in
+ * history saved before the prompt hardening, e.g. a literal `frac{a}{b}`).
+ * Only restored when followed by a brace-group, so ordinary prose is untouched.
+ */
+const BARE_COMMAND =
+  /(?<![\\])\b(frac|sqrt|sum|prod|int|iint|iiint|lim|log|ln|exp|sin|cos|tan|arctan|left|right|begin|end|boxed|displaystyle|text|mathrm|mathbf|mathcal|over|cdot|times|pm|infty|partial|theta|alpha|beta|gamma|lambda|mu|pi|Delta|Sigma|Omega)\b(?=\s*\{)/g;
+
+/**
+ * Wrap parenthesized math that has no delimiters — legacy text like
+ * `(x^{2}+px+q),\qquad q\approx0.618` — in inline `$...$` so KaTeX renders it.
+ * Uses a balanced-paren scan so nested groups survive intact.
+ */
+function wrapParenMath(segment: string): string {
+  let out = "";
+  let buf = "";
+  let depth = 0;
+  for (let i = 0; i < segment.length; i++) {
+    const ch = segment[i];
+    if (ch === "(") {
+      depth += 1;
+      buf += ch;
+    } else if (ch === ")") {
+      if (depth === 0) {
+        out += buf + ch;
+        buf = "";
+        continue;
+      }
+      depth -= 1;
+      buf += ch;
+      if (depth === 0) {
+        const inner = buf.slice(1, -1);
+        const looksLikeLatex =
+          /\\[a-zA-Z]+/.test(inner) ||
+          /[_^{}]/.test(inner) ||
+          /\b(frac|sqrt|over|sum|prod|lim|log|ln|cdot|times|pm|infty|approx|qquad)\b/.test(
+            inner,
+          );
+        out += looksLikeLatex ? "$" + sanitizeInlineTex(buf) + "$" : buf;
+        buf = "";
+      }
+    } else if (depth > 0) {
+      buf += ch;
+    } else {
+      out += ch;
+    }
+  }
+  return out + buf;
+}
+
+/**
+ * Legacy-message repair pass. Old replies were saved before the prompt
+ * hardening, so they can contain bare `frac{...}` / `sqrt{...}` / `begin{...}`
+ * without backslashes and parenthesized math without any delimiters. Running
+ * this on every render is what makes history display correctly too.
+ */
+function repairLegacyMath(input: string): string {
+  // 1) Restore missing backslashes everywhere except fenced/inline code.
+  const withBackslashes = input
+    .split(/(```[\s\S]*?```|`[^`\n]*`)/g)
+    .map((seg) => (seg.startsWith("`") ? seg : seg.replace(BARE_COMMAND, "\\$1")))
+    .join("");
+
+  // 2) Wrap parenthesized math, but only in plain text — never inside display
+  //    math, inline math, or code, which would break those spans.
+  const withParens = withBackslashes
+    .split(/(\$\$[\s\S]+?\$\$|```[\s\S]*?```|`[^`\n]*`|\$[^$\n]+\$)/g)
+    .map((seg) => {
+      const isProtected =
+        seg.startsWith("$$") ||
+        seg.startsWith("```") ||
+        seg.startsWith("`") ||
+        (seg.startsWith("$") && seg.endsWith("$"));
+      return isProtected ? seg : wrapParenMath(seg);
+    })
+    .join("");
+
+  // 3) History lines can also have completely undelimited math in prose
+  //    (`the quotient is \frac{1}{2}x^3 ...`). Group contiguous mathy tokens
+  //    and wrap the maximal runs containing a math command in `$...$`.
+  return withParens
+    .split(/(\$\$[\s\S]+?\$\$|```[\s\S]*?```|`[^`\n]*`)/g)
+    .map((seg) => (seg.startsWith("$$") || seg.startsWith("`") ? seg : wrapBareMath(seg)))
+    .join("");
+}
+
+/**
+ * Wrap runs of bare math in `$...$` on lines that have no `$` yet. A token is
+ * "mathy" if it consists only of math-ish characters; a run starts at a token
+ * with a math indicator (backslash command, ^, _, {, =, /...) and extends over
+ * adjacent mathy tokens, stopping at plain English words ("so", "minus", ...)
+ * so prose in between is never typeset as math.
+ */
+function wrapBareMath(segment: string): string {
+  const MATHY = /^[\w\\^_{}()\[\]=+\-*/.,±≈|:]+$/;
+  const INDICATOR =
+    /\\|^|_|\{|\}|=|\/|\b(frac|sqrt|over|sum|prod|int|lim|log|ln|exp|approx|cdot|times|pm|infty)\b/;
+  const isWord = (t: string) => /^[a-z]{2,}$/.test(t) && !/\\/.test(t);
+
+  return segment
+    .split("\n")
+    .map((line) => {
+      if (line.includes("$") || !/\\[a-zA-Z]/.test(line)) return line;
+      const tokens = line.split(/\s+/).filter(Boolean);
+      const out: string[] = [];
+      let run: string[] = [];
+      const flush = () => {
+        if (run.length > 0) {
+          out.push("$" + sanitizeInlineTex(run.join(" ")) + "$");
+          run = [];
+        }
+      };
+      for (let i = 0; i < tokens.length; i++) {
+        const t = tokens[i];
+        if (!MATHY.test(t) || !INDICATOR.test(t) || isWord(t)) {
+          flush();
+          out.push(t);
+          continue;
+        }
+        run.push(t);
+        while (
+          i + 1 < tokens.length &&
+          MATHY.test(tokens[i + 1]) &&
+          !isWord(tokens[i + 1])
+        ) {
+          run.push(tokens[++i]);
+        }
+        flush();
+      }
+      flush();
+      return out.join(" ");
+    })
+    .join("\n");
+}
+
+/** Does this text contain math/markdown worth routing through the pipeline? */
+export function looksLikeMathOrMarkdown(text: string): boolean {
+  if (!text) return false;
+  if (/```/.test(text) || /(^|\n)\s*#{1,6}\s/.test(text)) return true;
+  return isLatexish(text) || /\$\$/.test(text) || /\\\(|\\\[/.test(text);
+}
+
+/** Full normalization pipeline applied to a message before markdown rendering. */
+export function normalizeMessageContent(content: string): string {
+  return repairDisplayMath(
+    separateDisplayMath(
+      hoistInlineMath(
+        repairLegacyMath(normalizeMathDelimiters(stripMathArtifacts(content))),
+      ),
+    ),
+  );
 }
 
 /**
@@ -390,11 +557,7 @@ function MarkdownMessageBase({
   content: string;
   sources?: Source[];
 }) {
-  const normalized = repairDisplayMath(
-    separateDisplayMath(
-      hoistInlineMath(normalizeMathDelimiters(stripMathArtifacts(content))),
-    ),
-  );
+  const normalized = normalizeMessageContent(content);
 
   const withCitations = sources && sources.length > 0
     ? normalized.replace(/\[(\d+)\](?!\()/g, (match: string, n: string) => {
