@@ -33,6 +33,7 @@ import {
   X,
   Zap,
   Home,
+  Lightbulb,
   Bookmark,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -392,6 +393,7 @@ export default function Dashboard() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [deepResearch, setDeepResearch] = useState(false);
+  const [followUps, setFollowUps] = useState<string[]>([]);
   const [assistantError, setAssistantError] = useState<string | null>(null);
   const [panelNlp, setPanelNlp] = useState<NlpResult | null>(null);
   const [panelNews, setPanelNews] = useState<NewsItem[] | null>(null);
@@ -727,6 +729,7 @@ export default function Dashboard() {
     setEditingId(null);
     setRegionResult(null);
     setShowCalculator(false);
+    setFollowUps([]);
     player.stop();
   }, [activeId]);
 
@@ -1048,34 +1051,55 @@ export default function Dashboard() {
         }));
       }
 
+      // Strip the "SUGGEST: a, b, c" trailer off the reply: the items become
+      // clickable follow-up chips and the raw line never enters the saved
+      // message (so it can never render as literal text).
+      const extractFollowUps = (raw: string): string => {
+        const m = raw.match(/^SUGGEST:\s*(.+)$/im);
+        if (!m) {
+          setFollowUps([]);
+          return raw;
+        }
+        const items = m[1]
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .slice(0, 3);
+        setFollowUps(items);
+        return raw.replace(/^SUGGEST:\s*.+$/im, "").trimEnd();
+      };
+
+      let answerText = "";
       if (deepResearch) {
         const { answer, sources } = await runDeepResearch(
           sessionId,
           text,
           history,
         );
+        answerText = extractFollowUps(answer.text);
         const msgId = await appendMessage({
           sessionId,
           role: "assistant",
-          content: answer.text,
+          content: answerText,
           model: answer.model,
           usedFallback: answer.usedFallback,
           usedSearch: true,
           sources,
         });
-        void indexForRag(sessionId, userMsgId, msgId, messageContent, answer.text).catch(() => {});
+        void indexForRag(sessionId, userMsgId, msgId, messageContent, answerText).catch(() => {});
       } else {
         const visionUrls = imagePayload?.images?.map((i) => i.url);
         const answer = await runAsk(effectiveText, history, visionUrls && visionUrls.length > 0 ? visionUrls : undefined);
+        answerText = extractFollowUps(answer.text);
         const msgId = await appendMessage({
           sessionId,
           role: "assistant",
-          content: answer.text,
+          content: answerText,
           model: answer.model,
           usedFallback: answer.usedFallback,
           usedSearch: false,
         });
-        void indexForRag(sessionId, userMsgId, msgId, messageContent, answer.text).catch(() => {});
+        void indexForRag(sessionId, userMsgId, msgId, messageContent, answerText).catch(() => {});
       }
     } catch (err) {
       setAssistantError(
@@ -1539,6 +1563,23 @@ export default function Dashboard() {
         return;
       }
       // /image — generate directly from the message bar
+      // /plot — force an interactive Desmos graph of the given expression(s)
+      const plotMatch = text.match(/^\/(plot|graph)\s+([\s\S]+)/i);
+      if (plotMatch) {
+        const [, , expr] = plotMatch;
+        const exprLines = expr
+          .split(/[;,\n]+/)
+          .map((s) => s.trim())
+          .filter(Boolean);
+        const is3d = exprLines.some((l) => /\bz\s*=/i.test(l));
+        const block =
+          "```desmos\nmode: " + (is3d ? "3d" : "graphing") + "\nzoom: 10\nexpressions:\n" +
+          exprLines.join("\n") + "\n```";
+        setInput("");
+        void runSendWithText(block);
+        return;
+      }
+
       const imageMatch = text.match(/^\/(image|img|draw)\s+([\s\S]+)/i);
       if (imageMatch) {
         const [, , prompt] = imageMatch;
@@ -1937,7 +1978,9 @@ export default function Dashboard() {
             </div>
             <div className="hidden items-center gap-3 sm:flex">
               <span className="cursor-default" title="/time, /weather, /currency, /country, /solve <problem>, /image <prompt>">
-                Commands: <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">/time</code>{" "}
+                Commands: <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">/plot</code>{" "}
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">/solve</code>{" "}
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">/time</code>{" "}
                 <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">/weather</code>{" "}
                 <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">/currency</code>{" "}
                 <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">/country</code>
@@ -1990,10 +2033,18 @@ export default function Dashboard() {
                     { label: "🌍 Country", cmd: "/country Japan" },
                     { label: "🧮 Solve math", cmd: "/solve " },
                     { label: "🎨 Generate image", cmd: "/image " },
+                    { label: "📈 Plot graph", cmd: "/plot y = x^2" },
+                    { label: "🔬 Deep research", cmd: "__research__" },
+
                   ].map((item) => (
                     <button
                       key={item.cmd}
                       onClick={() => {
+                        if (item.cmd === "__research__") {
+                          setDeepResearch(true);
+                          inputRef.current?.focus();
+                          return;
+                        }
                         setInput(item.cmd);
                         inputRef.current?.focus();
                       }}
@@ -2206,6 +2257,23 @@ export default function Dashboard() {
                       {deepResearch
                         ? "Searching the web, then thinking…"
                         : "Thinking…"}
+                    </li>
+                  )}
+                  {!sending && followUps.length > 0 && (
+                    <li className="ml-9 mt-1 flex flex-wrap gap-1.5">
+                      {followUps.map((f) => (
+                        <button
+                          key={f}
+                          onClick={() => {
+                            setFollowUps([]);
+                            void runSendWithText(f);
+                          }}
+                          className="inline-flex items-center gap-1 rounded-full border px-3 py-1 text-[11px] text-muted-foreground transition-colors hover:border-foreground/30 hover:bg-accent hover:text-foreground"
+                        >
+                          <Lightbulb className="size-3" />
+                          {f}
+                        </button>
+                      ))}
                     </li>
                   )}
                 </ul>

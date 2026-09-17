@@ -133,7 +133,12 @@ const JARVIS_PROMPT =
   "\n- Multiple functions (\"compare x^2 and 2^x\"): put ALL of them in ONE graphing block, one per line." +
   "\n- Always add a short written explanation with proper LaTeX math around the block — the graph supports the answer, it does not replace it." +
   "\n- When the user's request mentions graph/plot/visualize IN ANY LANGUAGE (Hindi, Russian, etc.), the same rule applies — emit the desmos block." +
-  "\n- If the model is unsure whether a graph helps, default to including it for anything mentioning graph, plot, curve, or visualization.";
+  "\n- If the model is unsure whether a graph helps, default to including it for anything mentioning graph, plot, curve, or visualization." +
+  "\n\nFOLLOW-UP SUGGESTIONS — end EVERY complete reply with a final line exactly of the form:" +
+  "\nSUGGEST: first short follow-up, second short follow-up, third short follow-up" +
+  "\n- Exactly 3 suggestions, comma-separated, each under 6 words, no numbering — e.g. SUGGEST: differentiate this, plot for x in [-5,5], solve for y = 0" +
+  "\n- It MUST be the very last line of the reply with nothing after it — it is parsed out and shown to the user as clickable buttons." +
+  "\n- Never put the SUGGEST line inside the desmos code block or inside $$ math.";
 
 /**
  * Build the user message content, optionally including vision content
