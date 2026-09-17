@@ -432,7 +432,7 @@ export function hoistInlineMath(input: string): string {
         /(?<![\\$])\$(?!\s)((?:[^$\n\\]|\\.)+?)(?<!\s)\$(?!\$)/g,
         (match: string, tex: string) => {
           if (!shouldHoist(tex)) return match;
-          return `\n\n$$${tex}$$\n\n`;
+          return `\n\n$$\n${tex}\n$$\n\n`;
         },
       );
     })
@@ -485,7 +485,7 @@ export function isolateDisplayFences(input: string): string {
           // Unpaired opener — stream truncated mid-block. Close it here so it
           // cannot pair with a fence further down the document.
           const tex = fixRowSeparators(repairMathBlock(rest.slice(open + 2)));
-          out += rest.slice(0, open) + `\n\n$$${tex.trim()}$$\n\n`;
+          out += rest.slice(0, open) + `\n\n$$\n${tex.trim()}\n$$\n\n`;
           break;
         }
         const tex = rest.slice(open + 2, close);
@@ -497,7 +497,11 @@ export function isolateDisplayFences(input: string): string {
           continue;
         }
         const fixed = fixRowSeparators(repairMathBlock(tex));
-        out += rest.slice(0, open) + `\n\n$$${fixed.trim()}$$\n\n`;
+        // Emit the FLOW form ($$ alone on opening/closing lines): remark-math
+        // only parses display math when the fences are line-delimited. A
+        // single-line $$x$$ is text (inline) math, and multi-line text math is
+        // what mispairs with neighbouring paragraphs.
+        out += rest.slice(0, open) + `\n\n$$\n${fixed.trim()}\n$$\n\n`;
         rest = rest.slice(close + 2);
       }
       return out;
@@ -689,7 +693,9 @@ const components: Components = {
  * LaTeX across the rest of the reply.
  */
 function splitDisplayBlocks(text: string): string[] {
-  return text.split(/(\$\$[\s\S]+?\$\$)/g).filter((s) => s.length > 0);
+  return text
+    .split(/(```[\s\S]*?```|\$\$[\s\S]+?\$\$)/g)
+    .filter((s) => s.length > 0);
 }
 
 function MarkdownMessageBase({

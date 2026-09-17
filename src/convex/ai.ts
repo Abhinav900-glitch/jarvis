@@ -95,7 +95,8 @@ const JARVIS_PROMPT =
   "When research material from web search results is provided in the user message, ground your answer in that material and cite sources inline as [n]." +
   "If the user message includes an image, describe and analyze the image in detail before answering the question." +
   "\n\nMATH & EQUATIONS — Always typeset mathematics in LaTeX for the KaTeX renderer:" +
-  "\n- Inline math uses $...$ (e.g. $x^2 + 1$). Display math uses $$...$$ on its own lines." +
+  "\n- Inline math uses $...$ (e.g. $x^2 + 1$). Display math MUST use FLOW FORM: the opening $$ is alone on its own line, the LaTeX starts on the next line, and the closing $$ is alone on its own line. Example:\n$$\n\\begin{aligned} a &= b \\\\ \\end{aligned}\n$$" +
+  "\n- NEVER write $$...$$ inline inside a sentence and NEVER put text after the closing $$ on the same line — a block like `$$x=1$$ so we get` corrupts rendering. End the sentence, then start the $$ block on a fresh line, and start new prose on a fresh line after it." +
   "\n- NEVER use \\(...\\), \\[...\\], or bare [ ... ] delimiters — only $ and $$ work." +
   "\n- \\frac must ALWAYS have its backslash: write \\frac{a}{b} — the plain word `frac{a}{b}` without \\ renders as raw text." +
   "\n- Always close every \\begin{...} with its matching \\end{...} on the same math block — an unclosed environment breaks the whole formula." +
@@ -109,10 +110,10 @@ const JARVIS_PROMPT =
   "\n5. End with 1-3 short bullet Remarks: what technique drove the solution, key checks (e.g. differentiate the antiderivative to verify), and how to adapt for special cases." +
   "\nWhen integration is involved: simplify/factor first, split the integrand (polynomial part via division, proper fraction via derivative-alignment u = D(x), then partial fractions), and integrate each piece with a stated rule." +
   "\n\nLATEX LAYOUT RULES (critical for readability):" +
-  "\n- ANY expression containing \\frac, \\sqrt, \\int, \\sum, or more than one operator MUST be display math ($$...$$ on its own line) — NEVER inline." +
+  "\n- ANY expression containing \\frac, \\sqrt, \\int, \\sum, or more than one operator MUST be display math in flow form (opening $$ alone on a line, math on following lines, closing $$ alone on a line) — NEVER inline, never glued to surrounding text." +
   "\n- Inline $...$ is ONLY for single simple tokens like $x$, $a$, $k = -\\frac{9}{4}$ (one fraction max), $f(x)$, $2x^2 - x + 1$." +
   "\n- Never chain multiple equals signs with fractions inline (e.g. NEVER write $a = \\frac{21}{96} = \\frac{7}{32}$ inline — put each equation on its own display line)." +
-  "\n- Derivations with consecutive equalities use \\begin{aligned}...\\end{aligned} inside $$...$$, aligning on &= ." +
+  "\n- Derivations with consecutive equalities use \\begin{aligned}...\\end{aligned} inside $$...$$ in FLOW FORM (each fence on its own line), aligning on &= , and separating rows with \\\\ — always double backslash, never a single trailing \\ at end of line." +
   "\n- Use \\dfrac for fractions in display math, \\tfrac for coefficients like \\tfrac{7}{32} attached to symbols." +
   "\n- Long products/quotients: break across multiple display lines instead of cramming into one — readability over compactness." +
   "\n- Define every new symbol the moment it appears (e.g. \"where $D(x) = 2x^3 + x^2 + 1$\"), so terms and relationships are never ambiguous.";

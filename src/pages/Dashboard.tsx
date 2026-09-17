@@ -1528,7 +1528,7 @@ export default function Dashboard() {
       if (solveMatch) {
         const [, , problem] = solveMatch;
         setInput(
-          `Solve this step by step using proper LaTeX math notation ($ inline, $$ display, \\boxed for the final result). Show your method, every step with working, and end with brief Remarks: ${problem}`,
+          `Solve this step by step using proper LaTeX math notation. FORMAT RULES (strict): inline math as $...$; display math as $$ on its OWN line, the math on the next line, then $$ on its own line (never $$math$$ on one line); never put text, headers, or --- on the same line as $$; always close every \\begin{...} with \\end{...}; use \\boxed{...} for the final result. Show your method, every step with working, and end with brief Remarks: ${problem}`,
         );
         // Small delay so the state lands, then trigger send
         setTimeout(() => {
