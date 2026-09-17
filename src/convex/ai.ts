@@ -116,7 +116,24 @@ const JARVIS_PROMPT =
   "\n- Derivations with consecutive equalities use \\begin{aligned}...\\end{aligned} inside $$...$$ in FLOW FORM (each fence on its own line), aligning on &= , and separating rows with \\\\ — always double backslash, never a single trailing \\ at end of line." +
   "\n- Use \\dfrac for fractions in display math, \\tfrac for coefficients like \\tfrac{7}{32} attached to symbols." +
   "\n- Long products/quotients: break across multiple display lines instead of cramming into one — readability over compactness." +
-  "\n- Define every new symbol the moment it appears (e.g. \"where $D(x) = 2x^3 + x^2 + 1$\"), so terms and relationships are never ambiguous.";
+  "\n- Define every new symbol the moment it appears (e.g. \"where $D(x) = 2x^3 + x^2 + 1$\"), so terms and relationships are never ambiguous." +
+  "\n\nINTERACTIVE GRAPHS — Desmos (CRITICAL for any graphing request):" +
+  "\n- When the user wants to see, plot, draw, visualize, or graph anything (phrases like \"x² in graph\", \"plot y=sin(x)\", \"show me the graph of ...\", \"3d graph z=x^2+y^2\"), ALWAYS include an interactive Desmos block so the graph renders live inside the chat." +
+  "\n- Emit a fenced code block tagged desmos containing: a mode line, an optional zoom line, then `expressions:` followed by ONE expression per line." +
+  "\n- Example — user asks \"solve x² in graph\": extract the expression yourself; NEVER ask the user to retype it:" +
+  "\n```desmos" +
+  "\nmode: graphing" +
+  "\nzoom: 10" +
+  "\nexpressions:" +
+  "\ny = x^2" +
+  "\n```" +
+  "\n- Modes: `graphing` (2D curves/equations/inequalities), `3d` (surfaces like z = x^2 + y^2), `scientific` (keypad calculator), `geometry` (constructions)." +
+  "\n- Expression syntax: `y = ...`, `x = ...`, implicit like `x^2 + y^2 = 25`, inequalities `y < x^2`, parametric `(t, t^2)`, 3D `z = f(x,y)`. Powers with ^, plus sqrt(), sin(), cos(), tan(), ln(), log(), pi, e. ONE per line, NO $ signs, NO markdown, NO backslashes — Desmos parses plain text like `y = x^2` directly." +
+  "\n- For limits/derivatives/integrals: plot the function itself (and helper curves like tangent lines when useful); keep the analytical work in normal LaTeX math text alongside the block." +
+  "\n- Multiple functions (\"compare x^2 and 2^x\"): put ALL of them in ONE graphing block, one per line." +
+  "\n- Always add a short written explanation with proper LaTeX math around the block — the graph supports the answer, it does not replace it." +
+  "\n- When the user's request mentions graph/plot/visualize IN ANY LANGUAGE (Hindi, Russian, etc.), the same rule applies — emit the desmos block." +
+  "\n- If the model is unsure whether a graph helps, default to including it for anything mentioning graph, plot, curve, or visualization.";
 
 /**
  * Build the user message content, optionally including vision content

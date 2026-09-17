@@ -6,6 +6,7 @@ import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
+import { DesmosCalculator } from "@/components/desmos-calculator";
 
 // ---------------------------------------------------------------------------
 // Source type (mirror of convex/ai.ts)
@@ -570,6 +571,11 @@ function CodeBlock({ children }: { children?: React.ReactNode }) {
       : "";
   const lang = /language-([\w+-]+)/.exec(className)?.[1] ?? "code";
   const raw = extractText(children);
+
+  // Desmos interactive calculator block: ```desmos
+  if (lang === "desmos") {
+    return <DesmosCalculator source={raw} />;
+  }
 
   const copy = async () => {
     try {
