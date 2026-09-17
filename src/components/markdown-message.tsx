@@ -58,7 +58,7 @@ function isLatexish(s: string): boolean {
  *  - `!` glued after a command (e.g. `\int!`, `\arctan!\big`)
  *  - a comma used as a thin space before differentials (e.g. `f(x),dx`)
  */
-function stripMathArtifacts(input: string): string {
+export function stripMathArtifacts(input: string): string {
   return input
     .replace(/(\\[a-zA-Z]+)!/g, "$1")
     .replace(/,\s*(d[a-zA-Z])(?![a-zA-Z])/g, "\\,$1")
@@ -94,7 +94,7 @@ function repairMathBlock(tex: string): string {
   return out;
 }
 
-function repairDisplayMath(input: string): string {
+export function repairDisplayMath(input: string): string {
   return input.replace(/\$\$([\s\S]+?)\$\$/g, (_m: string, tex: string) => {
     return "$$" + repairMathBlock(tex) + "$$";
   });
@@ -107,7 +107,7 @@ function repairDisplayMath(input: string): string {
  *  - `\( ... \)` inline (OpenAI convention)
  *  - `[ ... ]` standalone display lines (bracket convention)
  */
-function normalizeMathDelimiters(input: string): string {
+export function normalizeMathDelimiters(input: string): string {
   let text = input;
 
   // OpenAI-style display: \[ ... \]  ->  $$ ... $$
@@ -201,7 +201,7 @@ const BARE_COMMAND =
  * `(x^{2}+px+q),\qquad q\approx0.618` — in inline `$...$` so KaTeX renders it.
  * Uses a balanced-paren scan so nested groups survive intact.
  */
-function wrapParenMath(segment: string): string {
+export function wrapParenMath(segment: string): string {
   let out = "";
   let buf = "";
   let depth = 0;
@@ -244,15 +244,21 @@ function wrapParenMath(segment: string): string {
  * without backslashes and parenthesized math without any delimiters. Running
  * this on every render is what makes history display correctly too.
  */
-function repairLegacyMath(input: string): string {
+export function repairLegacyMath(input: string): string {
+  // Genuine legacy LaTeX is ASCII. Segments containing non-ASCII characters
+  // (Devanagari, emoji, CJK, …) are prose — math-wrapping them corrupts the
+  // neighbouring $$ fences (the closing $$ gets absorbed and every later
+  // fence in the document then mispairs, producing the raw-red-LaTeX dump).
+  const isAsciiMathCandidate = (seg: string) => ! /[^\x00-\x7F]/.test(seg);
+
   // 1) Restore missing backslashes everywhere except fenced/inline code.
   const withBackslashes = input
     .split(/(```[\s\S]*?```|`[^`\n]*`)/g)
     .map((seg) => (seg.startsWith("`") ? seg : seg.replace(BARE_COMMAND, "\\$1")))
     .join("");
 
-  // 2) Wrap parenthesized math, but only in plain text — never inside display
-  //    math, inline math, or code, which would break those spans.
+  // 2) Wrap parenthesized math, but only in plain ASCII text — never inside
+  //    display math, inline math, code, or non-ASCII prose.
   const withParens = withBackslashes
     .split(/(\$\$[\s\S]+?\$\$|```[\s\S]*?```|`[^`\n]*`|\$[^$\n]+\$)/g)
     .map((seg) => {
@@ -261,7 +267,9 @@ function repairLegacyMath(input: string): string {
         seg.startsWith("```") ||
         seg.startsWith("`") ||
         (seg.startsWith("$") && seg.endsWith("$"));
-      return isProtected ? seg : wrapParenMath(seg);
+      return isProtected || !isAsciiMathCandidate(seg)
+        ? seg
+        : wrapParenMath(seg);
     })
     .join("");
 
@@ -270,7 +278,11 @@ function repairLegacyMath(input: string): string {
   //    and wrap the maximal runs containing a math command in `$...$`.
   return withParens
     .split(/(\$\$[\s\S]+?\$\$|```[\s\S]*?```|`[^`\n]*`)/g)
-    .map((seg) => (seg.startsWith("$$") || seg.startsWith("`") ? seg : wrapBareMath(seg)))
+    .map((seg) =>
+      seg.startsWith("$$") || seg.startsWith("`") || !isAsciiMathCandidate(seg)
+        ? seg
+        : wrapBareMath(seg),
+    )
     .join("");
 }
 
@@ -281,7 +293,7 @@ function repairLegacyMath(input: string): string {
  * adjacent mathy tokens, stopping at plain English words ("so", "minus", ...)
  * so prose in between is never typeset as math.
  */
-function wrapBareMath(segment: string): string {
+export function wrapBareMath(segment: string): string {
   const MATHY = /^[\w\\^_{}()\[\]=+\-*/.,±≈|:]+$/;
   const INDICATOR =
     /\\|^|_|\{|\}|=|\/|\b(frac|sqrt|over|sum|prod|int|lim|log|ln|exp|approx|cdot|times|pm|infty)\b/;
@@ -335,7 +347,11 @@ export function normalizeMessageContent(content: string): string {
   return repairDisplayMath(
     separateDisplayMath(
       hoistInlineMath(
-        repairLegacyMath(normalizeMathDelimiters(stripMathArtifacts(content))),
+        repairLegacyMath(
+          isolateDisplayFences(
+            normalizeMathDelimiters(stripMathArtifacts(content)),
+          ),
+        ),
       ),
     ),
   );
@@ -348,7 +364,7 @@ export function normalizeMessageContent(content: string): string {
  * or excessive length becomes its own $$...$$ block — KaTeX renders those
  * beautifully, so this is a pure win. Fenced code and inline code are untouched.
  */
-function hoistInlineMath(input: string): string {
+export function hoistInlineMath(input: string): string {
   const shouldHoist = (tex: string): boolean => {
     const fracCount = (tex.match(/\\[dt]?frac\b/g) ?? []).length;
     if (fracCount >= 2) return true;
@@ -374,11 +390,46 @@ function hoistInlineMath(input: string): string {
 }
 
 /**
+ * Repair row separators inside display TeX. Streaming models sometimes split
+ * the `\\` row break across a line ending with a single `\`, which is not
+ * valid TeX and corrupts aligned/cases environments.
+ */
+function fixRowSeparators(tex: string): string {
+  return tex.replace(/(^|[^\\])\\\s*\n/g, "$1\\\\\n");
+}
+
+/**
+ * THE critical structural repair: isolate every $$...$$ span onto its own
+ * lines. When a model writes `text $$math$$ more text` (or glues blocks
+ * back-to-back), remark-math parses the $$ as INLINE math and pairs fences
+ * across the document — display blocks vanish and the closing $$ plus the
+ * following prose end up inside one broken KaTeX node (the giant red raw-LaTeX
+ * dump). Re-emitting each span on its own lines with blank lines around it
+ * forces remark-math's flow parser to pair every fence correctly.
+ */
+export function isolateDisplayFences(input: string): string {
+  return input
+    .split(/(```[\s\S]*?```|`[^`\n]*`)/g)
+    .map((seg) => {
+      if (seg.startsWith("`")) return seg;
+      return seg
+        .split(/(\$\$[\s\S]+?\$\$)/g)
+        .map((part) => {
+          if (!part.startsWith("$$") || !part.endsWith("$$")) return part;
+          const tex = fixRowSeparators(repairMathBlock(part.slice(2, -2)));
+          return `\n\n$$${tex.trim()}$$\n\n`;
+        })
+        .join("");
+    })
+    .join("");
+}
+
+/**
  * Guarantee blank lines around display-math blocks. When a $$...$$ block sits
  * directly against a text line (no empty line between), remark parses it as a
  * paragraph continuation and the tall KaTeX box overlaps the surrounding text.
  */
-function separateDisplayMath(input: string): string {
+export function separateDisplayMath(input: string): string {
   return input
     .split(/(```[\s\S]*?```)/g)
     .map((seg) => {
