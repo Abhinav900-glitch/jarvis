@@ -7,6 +7,7 @@ import {
   Check,
   Download,
   FileText,
+  FunctionSquare,
   Globe,
   ImagePlus,
   Languages,
@@ -2564,6 +2565,28 @@ export default function Dashboard() {
                       ) : (
                         <Wand2 className="size-3.5" />
                       )}
+                    </button>
+                    <button
+                      onClick={() => {
+                        const block = "```desmos\nmode: graphing\nzoom: 10\nexpressions:\n\n```";
+                        setInput((prev) =>
+                          prev.trim()
+                            ? prev.replace(/\s*$/, "\n\n" + block)
+                            : block,
+                        );
+                        inputRef.current?.focus();
+                        requestAnimationFrame(() => {
+                          const el = inputRef.current;
+                          if (!el) return;
+                          const pos = el.value.length - 4; // just before the closing fence
+                          el.setSelectionRange(pos, pos);
+                        });
+                      }}
+                      disabled={sending || editingId !== null}
+                      title="Insert a Desmos graph block — type an expression like y = x^2 inside, Jarvis plots it live"
+                      className="inline-flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
+                    >
+                      <FunctionSquare className="size-3.5" />
                     </button>
                   </div>
                   <textarea
