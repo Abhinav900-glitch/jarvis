@@ -1,3 +1,4 @@
+import katex from "katex";
 import { Check, Copy } from "lucide-react";
 import { memo, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -80,16 +81,42 @@ function sanitizeInlineTex(tex: string): string {
 
 /**
  * Close any `\begin{env}` that never got its `\end{env}` inside a display
- * block (truncated streams would otherwise fail to parse).
+ * block, and open any `\end{env}` whose `\begin{env}` was lost (truncated
+ * streams cut messages mid-block — both directions must be healed or KaTeX
+ * renders the whole block as raw red text).
  */
 function repairMathBlock(tex: string): string {
-  const opens = [...tex.matchAll(/\\begin\{([a-zA-Z*]+)\}/g)].map((m) => m[1]);
-  const closes = [...tex.matchAll(/\\end\{([a-zA-Z*]+)\}/g)].map((m) => m[1]);
+  // Heal a truncated env command first: `\end{aligned` (no closing brace) is
+  // invisible to the begin/end counters below and would get a DUPLICATE
+  // \end{aligned} appended. Complete any \begin{x / \end{x missing its } }.
+  let pre = tex.replace(/(\\(?:begin|end)\{[a-zA-Z]*)(?=[\s]|$)/g, "$1}");
+  const opens = [...pre.matchAll(/\\begin\{([a-zA-Z*]+)\}/g)].map((m) => m[1]);
+  const closes = [...pre.matchAll(/\\end\{([a-zA-Z*]+)\}/g)].map((m) => m[1]);
   const count = (arr: string[], s: string) => arr.filter((x) => x === s).length;
-  let out = tex;
+  let out = pre;
+  // Orphan \end{env} → prepend the missing \begin{env}
+  for (const env of new Set(closes)) {
+    const missing = count(closes, env) - count(opens, env);
+    for (let i = 0; i < missing; i++) out = "\\begin{" + env + "}" + out;
+  }
+  // Orphan \begin{env} → append the missing \end{env}
   for (const env of new Set(opens)) {
     const missing = count(opens, env) - count(closes, env);
     for (let i = 0; i < missing; i++) out += "\\end{" + env + "}";
+  }
+  // Heal unbalanced braces (a truncated `\end{aligned` missing its `}`).
+  let depth = 0;
+  for (let i = 0; i < out.length; i++) {
+    if (out[i] === "\\") {
+      i++;
+      continue;
+    }
+    if (out[i] === "{") depth++;
+    else if (out[i] === "}") depth--;
+  }
+  while (depth > 0) {
+    out += "}";
+    depth--;
   }
   return out;
 }
@@ -251,26 +278,44 @@ export function repairLegacyMath(input: string): string {
   // fence in the document then mispairs, producing the raw-red-LaTeX dump).
   const isAsciiMathCandidate = (seg: string) => ! /[^\x00-\x7F]/.test(seg);
 
+  const isProtected = (seg: string) =>
+    seg.startsWith("$$") ||
+    seg.startsWith("```") ||
+    seg.startsWith("`") ||
+    (seg.startsWith("$") && seg.endsWith("$"));
+
+  // NOTE: this stage runs AFTER isolateDisplayFences in the pipeline. On
+  // isolate-normalized text every $$...$$ span is a well-formed pair on its
+  // own lines, so the lazy split regexes below segment correctly. On raw
+  // (possibly truncated) text they mispair — never reorder these two stages.
+
   // 1) Restore missing backslashes everywhere except fenced/inline code.
   const withBackslashes = input
     .split(/(```[\s\S]*?```|`[^`\n]*`)/g)
     .map((seg) => (seg.startsWith("`") ? seg : seg.replace(BARE_COMMAND, "\\$1")))
     .join("");
 
+  // 1b) Strip orphan \begin{...}/\end{...} tokens left in PROSE (outside any
+  //     math or code). They come from truncated streams and are meaningless
+  //     outside math — left in place they render as literal garbage text.
+  const withEnvStripped = withBackslashes
+    .split(/(\$\$[\s\S]+?\$\$|```[\s\S]*?```|`[^`\n]*`|\$[^$\n]+\$)/g)
+    .map((seg) =>
+      isProtected(seg)
+        ? seg
+        : seg.replace(/\\(?:begin|end)\{[a-zA-Z*]+\}/g, ""),
+    )
+    .join("");
+
   // 2) Wrap parenthesized math, but only in plain ASCII text — never inside
   //    display math, inline math, code, or non-ASCII prose.
-  const withParens = withBackslashes
+  const withParens = withEnvStripped
     .split(/(\$\$[\s\S]+?\$\$|```[\s\S]*?```|`[^`\n]*`|\$[^$\n]+\$)/g)
-    .map((seg) => {
-      const isProtected =
-        seg.startsWith("$$") ||
-        seg.startsWith("```") ||
-        seg.startsWith("`") ||
-        (seg.startsWith("$") && seg.endsWith("$"));
-      return isProtected || !isAsciiMathCandidate(seg)
+    .map((seg) =>
+      isProtected(seg) || !isAsciiMathCandidate(seg)
         ? seg
-        : wrapParenMath(seg);
-    })
+        : wrapParenMath(seg),
+    )
     .join("");
 
   // 3) History lines can also have completely undelimited math in prose
@@ -344,6 +389,11 @@ export function looksLikeMathOrMarkdown(text: string): boolean {
 
 /** Full normalization pipeline applied to a message before markdown rendering. */
 export function normalizeMessageContent(content: string): string {
+  // Order matters: fence ISOLATION must run BEFORE legacy repair. On raw
+  // (possibly truncated) text a lazy $$...$$ split pairs a stray closing fence
+  // with the next block's opener and every downstream segmenter misaligns.
+  // isolateDisplayFences drops bogus pairs and puts every real pair on its own
+  // lines, after which the legacy passes segment correctly.
   return repairDisplayMath(
     separateDisplayMath(
       hoistInlineMath(
@@ -406,20 +456,51 @@ function fixRowSeparators(tex: string): string {
  * following prose end up inside one broken KaTeX node (the giant red raw-LaTeX
  * dump). Re-emitting each span on its own lines with blank lines around it
  * forces remark-math's flow parser to pair every fence correctly.
+ *
+ * This stage also validates every fence PAIR: if the content between two
+ * fences contains no math at all (pure prose — Devanagari, markdown, etc.),
+ * the first fence was a stray closer from a truncated block. Pairing it with
+ * the next fence would swallow the prose between them into one broken math
+ * node (the root cause of "half the reply renders as raw red LaTeX"). The
+ * stray fence is dropped instead and pairing resumes after it. An unpaired
+ * trailing opener (stream cut mid-block) gets closed at the end of the text.
  */
 export function isolateDisplayFences(input: string): string {
+  const looksLikeMath = (s: string) => /\\[a-zA-Z]|[_^{}=&]/.test(s);
+
   return input
     .split(/(```[\s\S]*?```|`[^`\n]*`)/g)
     .map((seg) => {
       if (seg.startsWith("`")) return seg;
-      return seg
-        .split(/(\$\$[\s\S]+?\$\$)/g)
-        .map((part) => {
-          if (!part.startsWith("$$") || !part.endsWith("$$")) return part;
-          const tex = fixRowSeparators(repairMathBlock(part.slice(2, -2)));
-          return `\n\n$$${tex.trim()}$$\n\n`;
-        })
-        .join("");
+      let rest = seg;
+      let out = "";
+      for (;;) {
+        const open = rest.indexOf("$$");
+        if (open === -1) {
+          out += rest;
+          break;
+        }
+        const close = rest.indexOf("$$", open + 2);
+        if (close === -1) {
+          // Unpaired opener — stream truncated mid-block. Close it here so it
+          // cannot pair with a fence further down the document.
+          const tex = fixRowSeparators(repairMathBlock(rest.slice(open + 2)));
+          out += rest.slice(0, open) + `\n\n$$${tex.trim()}$$\n\n`;
+          break;
+        }
+        const tex = rest.slice(open + 2, close);
+        if (!looksLikeMath(tex)) {
+          // Bogus pair: the first fence is an orphan closer. Drop it and
+          // rescan from just after it.
+          out += rest.slice(0, open);
+          rest = rest.slice(open + 2);
+          continue;
+        }
+        const fixed = fixRowSeparators(repairMathBlock(tex));
+        out += rest.slice(0, open) + `\n\n$$${fixed.trim()}$$\n\n`;
+        rest = rest.slice(close + 2);
+      }
+      return out;
     })
     .join("");
 }
@@ -601,6 +682,16 @@ const components: Components = {
 // Markdown renderer
 // ---------------------------------------------------------------------------
 
+/**
+ * Split a message into display-math blocks and everything else. Rendering
+ * each block through its OWN ReactMarkdown instance isolates failures: a
+ * broken math node can only ever trash its own block, never cascade red raw
+ * LaTeX across the rest of the reply.
+ */
+function splitDisplayBlocks(text: string): string[] {
+  return text.split(/(\$\$[\s\S]+?\$\$)/g).filter((s) => s.length > 0);
+}
+
 function MarkdownMessageBase({
   content,
   sources,
@@ -617,19 +708,50 @@ function MarkdownMessageBase({
       })
     : normalized;
 
+  const blocks = splitDisplayBlocks(withCitations);
+
   return (
     <div className="md-body">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[
-          rehypeHighlight,
-          [rehypeKatex, { throwOnError: false, strict: false, output: "html" }],
-        ]}
-        components={components}
-      >
-        {withCitations}
-      </ReactMarkdown>
+      {blocks.map((block, i) => {
+        if (!block.startsWith("$$")) {
+          return <MarkdownChunk key={i} text={block} />;
+        }
+        // Display block: validate the TeX first. If KaTeX cannot parse it,
+        // render the source in a readable code panel instead of letting KaTeX
+        // dump raw red LaTeX into the message.
+        const tex = block.slice(2, -2);
+        let valid = true;
+        try {
+          katex.renderToString(tex, { displayMode: true, throwOnError: true, strict: false });
+        } catch {
+          valid = false;
+        }
+        if (valid) return <MarkdownChunk key={i} text={block} />;
+        return (
+          <pre
+            key={i}
+            className="my-3 overflow-x-auto rounded-md border bg-muted/40 px-4 py-3 text-[13px] leading-6 text-muted-foreground"
+          >
+            {tex.trim()}
+          </pre>
+        );
+      })}
     </div>
+  );
+}
+
+function MarkdownChunk({ text }: { text: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[
+        rehypeHighlight,
+        [rehypeKatex, { throwOnError: false, strict: false, output: "html" }],
+      ]}
+      components={components}
+    >
+      {text}
+    </ReactMarkdown>
   );
 }
 
