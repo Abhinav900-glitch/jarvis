@@ -5,15 +5,20 @@ import { Loader2, Maximize2, Minimize2, ExternalLink } from "lucide-react";
 
 // ---------------------------------------------------------------------------
 // Desmos API lazy loader
-// Loads https://www.desmos.com/api/v1.9/calculator.js?libraries=dv3d once and
-// caches the promise so every calculator instance shares one script.
+// Loads https://www.desmos.com/api/v1.13/calculator.js once and caches the
+// promise (keyed by URL) so every calculator instance shares one script.
+// NOTE: since v1.10 the 3D calculator ships inside calculator.js itself — the
+// old `libraries=dv3d` query param is obsolete. 3D/geometry/scientific access
+// is gated per API key at desmos.com/my-api, not by a script parameter.
 // ---------------------------------------------------------------------------
 
-let desmosPromise: Promise<void> | null = null;
+const desmosPromises = new Map<string, Promise<void>>();
 
 function loadDesmos(apiKey: string): Promise<void> {
-  if (desmosPromise) return desmosPromise;
-  desmosPromise = new Promise((resolve, reject) => {
+  const url = `https://www.desmos.com/api/v1.13/calculator.js?apiKey=${encodeURIComponent(apiKey)}`;
+  const cached = desmosPromises.get(url);
+  if (cached) return cached;
+  const promise = new Promise<void>((resolve, reject) => {
     if (typeof window === "undefined") {
       reject(new Error("Desmos requires a browser"));
       return;
@@ -24,16 +29,17 @@ function loadDesmos(apiKey: string): Promise<void> {
       return;
     }
     const script = document.createElement("script");
-    script.src = `https://www.desmos.com/api/v1.9/calculator.js?apiKey=${encodeURIComponent(apiKey)}&libraries=dv3d`;
+    script.src = url;
     script.async = true;
     script.onload = () => resolve();
     script.onerror = () => {
-      desmosPromise = null;
+      desmosPromises.delete(url);
       reject(new Error("Failed to load the Desmos API script"));
     };
     document.head.appendChild(script);
   });
-  return desmosPromise;
+  desmosPromises.set(url, promise);
+  return promise;
 }
 
 // ---------------------------------------------------------------------------
@@ -120,6 +126,9 @@ type DesmosConstructor = new (
 
 interface DesmosGlobal {
   GraphingCalculator: DesmosConstructor;
+  // v1.10+: the 3D calculator is `Calculator3D`. Older builds exposed it as
+  // `GraphingCalculator3D` behind `libraries=dv3d` — kept as a fallback.
+  Calculator3D?: DesmosConstructor;
   GraphingCalculator3D?: DesmosConstructor;
   ScientificCalculator: DesmosConstructor;
   Geometry?: DesmosConstructor;
@@ -175,16 +184,34 @@ export function DesmosCalculator({ source }: { source: string }) {
 
         let calc: DesmosCalc;
         switch (spec.mode) {
-          case "3d":
-            if (!D.GraphingCalculator3D) throw new Error("3D calculator unavailable (libraries=dv3d missing)");
-            calc = new D.GraphingCalculator3D(containerRef.current, options);
+          case "3d": {
+            const Calc3D = D.Calculator3D ?? D.GraphingCalculator3D;
+            if (!Calc3D) {
+              throw new Error(
+                "3D calculator unavailable — your Desmos API key needs 3D access. Enable it in the Desmos dashboard (desmos.com/my-api → your key → Calculators → 3D), then reload.",
+              );
+            }
+            try {
+              calc = new Calc3D(containerRef.current, options);
+            } catch {
+              throw new Error("3D calculator failed to start — WebGL may be disabled in this browser.");
+            }
             break;
+          }
           case "scientific":
             calc = new D.ScientificCalculator(containerRef.current, options);
             break;
           case "geometry":
-            if (!D.Geometry) throw new Error("Geometry tool unavailable");
-            calc = new D.Geometry(containerRef.current, options);
+            if (!D.Geometry) {
+              throw new Error(
+                "Geometry tool unavailable — your Desmos API key needs Geometry access. Enable it at desmos.com/my-api, then reload.",
+              );
+            }
+            try {
+              calc = new D.Geometry(containerRef.current, options);
+            } catch {
+              throw new Error("Geometry tool failed to start. Please try again.");
+            }
             break;
           default:
             calc = new D.GraphingCalculator(containerRef.current, options);
