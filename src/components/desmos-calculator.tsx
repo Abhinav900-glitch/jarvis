@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { Loader2, Maximize2, Minimize2, ExternalLink } from "lucide-react";
+import katex from "katex";
+import { ChevronDown, ExternalLink, Loader2, Maximize2, Minimize2, Sigma } from "lucide-react";
 
 // ---------------------------------------------------------------------------
 // Desmos API lazy loader
@@ -103,6 +104,122 @@ export function parseDesmosSpec(source: string): DesmosSpec {
 }
 
 // ---------------------------------------------------------------------------
+// Function list rendering (KaTeX) — so the plotted functions are visible as
+// real math above the graph, in every calculator block (graphing, 3D, ...).
+// ---------------------------------------------------------------------------
+
+const FUNCTION_NAME_RE =
+  /\b(sin|cos|tan|sec|csc|cot|arcsin|arccos|arctan|sinh|cosh|tanh|ln|log|exp)\b(?=\s*\()/g;
+
+/** Replace `word(...)` with replacement(matching-inner-content), balancing parens. */
+function replaceBalanced(input: string, word: string, build: (arg: string) => string): string {
+  const re = new RegExp(`\\b${word}\\s*\\(`, "g");
+  let out = "";
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(input))) {
+    out += input.slice(last, m.index);
+    let depth = 1;
+    let i = m.index + m[0].length;
+    while (i < input.length && depth > 0) {
+      if (input[i] === "(") depth++;
+      else if (input[i] === ")") depth--;
+      if (depth > 0) i++;
+    }
+    out += build(input.slice(m.index + m[0].length, i));
+    last = i + 1; // skip the closing paren
+  }
+  out += input.slice(last);
+  return out;
+}
+
+/** `^` / `_` followed by one token → braced group: `x^2` → `x^{2}`, `x^(n+1)` → `x^{n+1}`. */
+function braceScripts(tex: string): string {
+  let out = "";
+  for (let i = 0; i < tex.length; i++) {
+    const ch = tex[i];
+    if (ch === "^" || ch === "_") {
+      out += ch;
+      i++;
+      if (tex[i] === "(") {
+        let depth = 1;
+        let j = i + 1;
+        while (j < tex.length && depth > 0) {
+          if (tex[j] === "(") depth++;
+          else if (tex[j] === ")") depth--;
+          if (depth > 0) j++;
+        }
+        out += `{${tex.slice(i + 1, j)}}`;
+        i = j;
+      } else if (tex[i] === "{") {
+        let depth = 1;
+        let j = i + 1;
+        while (j < tex.length && depth > 0) {
+          if (tex[j] === "{") depth++;
+          else if (tex[j] === "}") depth--;
+          if (depth > 0) j++;
+        }
+        out += tex.slice(i, j + 1);
+        i = j;
+      } else if (i < tex.length) {
+        out += `{${tex[i]}}`;
+      }
+    } else {
+      out += ch;
+    }
+  }
+  return out;
+}
+
+/**
+ * Plain Desmos input (e.g. `y = x^2`) → LaTeX (e.g. `y = x^{2}`) so the
+ * function list renders through KaTeX. If the string already contains LaTeX
+ * commands (Desmos-canonical expressions), it is used as-is.
+ */
+export function expressionToTex(src: string): string {
+  const trimmed = src.trim();
+  if (/\\[a-zA-Z]+/.test(trimmed)) return trimmed;
+  let tex = trimmed;
+  tex = replaceBalanced(tex, "sqrt", (a) => `\\sqrt{${a}}`);
+  // Pipes first — then abs() produces the same form without re-triggering it.
+  tex = tex.replace(/\|([^|]+)\|/g, "\\left|$1\\right|");
+  tex = replaceBalanced(tex, "abs", (a) => `\\left|${a}\\right|`);
+  tex = tex.replace(FUNCTION_NAME_RE, "\\$1");
+  tex = tex.replace(/\<=/g, "\\le").replace(/>=/g, "\\ge");
+  tex = braceScripts(tex);
+  tex = tex.replace(/\(/g, "\\left(").replace(/\)/g, "\\right)");
+  tex = tex.replace(/\*/g, "\\cdot ");
+  return tex;
+}
+
+/** Renders a TeX string inline with KaTeX, falling back to raw code on error. */
+function InlineTex({ tex }: { tex: string }) {
+  const html = useMemo(() => {
+    try {
+      return katex.renderToString(tex, { throwOnError: false, displayMode: false, output: "html" });
+    } catch {
+      return null;
+    }
+  }, [tex]);
+  if (html === null) return <code className="text-[11px]">{tex}</code>;
+  return <span dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
+/** Compact one-line list of the plotted functions (first `limit` + overflow count). */
+function ExpressionList({ expressions, limit = 2 }: { expressions: string[]; limit?: number }) {
+  const visible = expressions.slice(0, limit);
+  const extra = expressions.length - visible.length;
+  return (
+    <span className="inline-flex items-center gap-2 align-middle">
+      {visible.map((expr, i) => (
+        <InlineTex key={`${i}-${expr}`} tex={expressionToTex(expr)} />
+      ))}
+      {extra > 0 && <span className="text-[10px] text-muted-foreground">+{extra}</span>}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Minimal typings for the parts of the Desmos API we use
 // ---------------------------------------------------------------------------
 
@@ -121,6 +238,9 @@ interface DesmosCalc {
     top?: number;
     bottom?: number;
   }) => void;
+  getExpressions?: () => { latex?: string }[];
+  observeEvent?: (evt: string, cb: () => void) => void;
+  unobserveEvent?: (evt: string) => void;
   destroy: () => void;
 }
 
@@ -159,6 +279,8 @@ export function DesmosCalculator({ source }: { source: string }) {
   const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const [showExprs, setShowExprs] = useState(false);
+  const [liveExpressions, setLiveExpressions] = useState<string[]>([]);
 
   useEffect(() => {
     let destroyed = false;
@@ -257,6 +379,30 @@ export function DesmosCalculator({ source }: { source: string }) {
 
         if (spec.expressions.length > 0 && typeof calc.setExpressions === "function") {
           calc.setExpressions(spec.expressions.map((latex) => ({ latex })));
+          // Capture the Desmos-canonicalised LaTeX so the function list shows
+          // exactly what the calculator received.
+          try {
+            const live = calc.getExpressions?.() ?? [];
+            const tex = live.map((e) => e.latex ?? "").filter(Boolean);
+            if (tex.length > 0) setLiveExpressions(tex);
+          } catch {
+            // keep the parsed list
+          }
+        }
+        // Keep the function list in sync when the user edits the graph
+        // directly inside Desmos.
+        try {
+          calc.observeEvent?.("change", () => {
+            try {
+              const live = calc.getExpressions?.() ?? [];
+              const tex = live.map((e) => e.latex ?? "").filter(Boolean);
+              setLiveExpressions(tex);
+            } catch {
+              // ignore transient states during edits
+            }
+          });
+        } catch {
+          // observation unsupported — list stays static
         }
         if (spec.zoom && typeof calc.setMathBounds === "function") {
           const z = spec.zoom;
@@ -274,6 +420,11 @@ export function DesmosCalculator({ source }: { source: string }) {
     return () => {
       destroyed = true;
       try {
+        calcRef.current?.unobserveEvent?.("change");
+      } catch {
+        // not observing
+      }
+      try {
         calcRef.current?.destroy();
       } catch {
         // already destroyed
@@ -282,19 +433,36 @@ export function DesmosCalculator({ source }: { source: string }) {
     };
   }, [config, spec.mode, spec.zoom, spec.expressions]);
 
+  // Desmos-canonical LaTeX once available; falls back to the parsed list.
+  const exprList = liveExpressions.length > 0 ? liveExpressions : spec.expressions;
+
   return (
     <div className="my-4 overflow-hidden rounded-md border">
-      <div className="flex items-center justify-between border-b bg-muted/60 px-3 py-1.5">
-        <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
-          {spec.mode === "scientific"
-            ? "Desmos scientific · keypad"
-            : spec.mode === "fourfunction"
-              ? "Desmos four-function · basic"
-              : spec.mode === "geometry"
-                ? "Desmos geometry · construction tools"
-                : `Desmos ${spec.mode === "3d" ? "3D" : spec.mode} · ${spec.expressions.length} expression${spec.expressions.length === 1 ? "" : "s"}`}
+      <div className="flex items-center justify-between gap-2 border-b bg-muted/60 px-3 py-1.5">
+        <span className="flex min-w-0 flex-1 items-center gap-2 text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
+          <span className="shrink-0">
+            {spec.mode === "scientific"
+              ? "Desmos scientific · keypad"
+              : spec.mode === "fourfunction"
+                ? "Desmos four-function · basic"
+                : spec.mode === "geometry"
+                  ? "Desmos geometry · construction tools"
+                  : `Desmos ${spec.mode === "3d" ? "3D" : spec.mode}`}
+          </span>
+          {exprList.length > 0 && (
+            <button
+              onClick={() => setShowExprs((s) => !s)}
+              className="flex min-w-0 items-center gap-1 rounded text-left normal-case tracking-normal transition-colors hover:text-foreground"
+              title={showExprs ? "Hide plotted functions" : "Show plotted functions"}
+            >
+              <span className="min-w-0 truncate">
+                <ExpressionList expressions={exprList} />
+              </span>
+              <ChevronDown className={`size-3 shrink-0 transition-transform ${showExprs ? "rotate-180" : ""}`} />
+            </button>
+          )}
         </span>
-        <div className="flex items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1">
           <button
             onClick={() => setExpanded((e) => !e)}
             className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
@@ -321,6 +489,23 @@ export function DesmosCalculator({ source }: { source: string }) {
           </a>
         </div>
       </div>
+      {showExprs && exprList.length > 0 && (
+        <div className="border-b bg-muted/30 px-3 py-2">
+          <p className="mb-1.5 flex items-center gap-1 text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
+            <Sigma className="size-3" /> Plotted functions ({exprList.length})
+          </p>
+          <ul className="space-y-1.5">
+            {exprList.map((expr, i) => (
+              <li key={`${i}-${expr}`} className="flex items-start gap-2 text-sm text-foreground">
+                <span className="shrink-0 pt-0.5 text-[10px] tabular-nums text-muted-foreground">{i + 1}</span>
+                <span className="min-w-0 overflow-x-auto">
+                  <InlineTex tex={expressionToTex(expr)} />
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <div
         style={{ height: expanded ? 560 : spec.mode === "scientific" || spec.mode === "fourfunction" || spec.mode === "geometry" ? 460 : 380 }}
         className="relative w-full bg-white transition-[height] duration-200"
