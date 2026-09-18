@@ -3,6 +3,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  ArrowDown,
   ArrowUp,
   Box,
   Calculator,
@@ -11,6 +12,7 @@ import {
   Download,
   FileText,
   Equal,
+  Copy,
   FunctionSquare,
   Globe,
   ImagePlus,
@@ -399,6 +401,7 @@ export default function Dashboard() {
   const [sending, setSending] = useState(false);
   const [deepResearch, setDeepResearch] = useState(false);
   const [followUps, setFollowUps] = useState<string[]>([]);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const [assistantError, setAssistantError] = useState<string | null>(null);
   const [panelNlp, setPanelNlp] = useState<NlpResult | null>(null);
   const [panelNews, setPanelNews] = useState<NewsItem[] | null>(null);
@@ -700,12 +703,28 @@ export default function Dashboard() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const lastMsg = messages?.[messages.length - 1];
 
+  // Smart auto-scroll: stick to the bottom while the reply streams, but never
+  // yank the page away if the user scrolled up to read — a jump-to-latest
+  // pill appears instead.
+  const [atBottom, setAtBottom] = useState(true);
   useEffect(() => {
-    scrollRef.current?.scrollTo({
-      top: scrollRef.current.scrollHeight,
-      behavior: "smooth",
-    });
-  }, [messages?.length, sending]);
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 80);
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+  useEffect(() => {
+    if (atBottom) {
+      scrollRef.current?.scrollTo({
+        top: scrollRef.current.scrollHeight,
+        behavior: "smooth",
+      });
+    }
+  }, [messages?.length, sending, atBottom]);
 
   // Auto-speak new assistant replies when voice output is enabled
   const prevMsgCount = useRef(messages?.length ?? 0);
@@ -737,6 +756,30 @@ export default function Dashboard() {
     setFollowUps([]);
     player.stop();
   }, [activeId]);
+
+  // Keyboard shortcuts: Ctrl/Cmd+K starts a new chat, "/" focuses the input
+  // (when not already typing).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setActiveId(null);
+        setSidebarOpen(false);
+        return;
+      }
+      if (
+        e.key === "/" &&
+        !(e.ctrlKey || e.metaKey || e.altKey) &&
+        document.activeElement?.tagName !== "TEXTAREA" &&
+        document.activeElement?.tagName !== "INPUT"
+      ) {
+        e.preventDefault();
+        inputRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // Refresh displayed time every second
   useEffect(() => {
@@ -2027,8 +2070,9 @@ export default function Dashboard() {
                   How can I help?
                 </h1>
                 <p className="mt-2 max-w-md text-center text-sm leading-6 text-muted-foreground">
-                  Ask anything. Toggle Deep Research for live web answers with
-                  citations — Groq answers first, Hugging Face takes over
+                  Ask anything — try “solve x² in graph” for a live plot, or /solve
+                  for step-by-step math. Toggle Deep Research for cited web
+                  answers — Groq answers first, Hugging Face takes over
                   automatically if it fails.
                 </p>
                 <div className="mt-8 grid w-full max-w-md grid-cols-1 gap-2 sm:grid-cols-2">
@@ -2122,6 +2166,23 @@ export default function Dashboard() {
                         <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
                           {m.role === "user" ? "You" : "Jarvis"}
                         </span>
+                        <button
+                          onClick={() => {
+                            if (!navigator.clipboard) return;
+                            navigator.clipboard.writeText(m.content).then(() => {
+                              setCopiedId(m._id);
+                              setTimeout(() => setCopiedId(null), 1500);
+                            }).catch(() => {});
+                          }}
+                          title="Copy message"
+                          className="rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+                        >
+                          {copiedId === m._id ? (
+                            <Check className="size-3" />
+                          ) : (
+                            <Copy className="size-3" />
+                          )}
+                        </button>
                         {m.role === "user" && !sending && (
                           <button
                             onClick={() => void handleEditMessage(m._id, m.content)}
@@ -2304,6 +2365,22 @@ export default function Dashboard() {
                   )}
                 </ul>
               </div>
+            )}
+          </div>
+
+          {/* Jump-to-latest pill when the user scrolled up during a stream */}
+          <div className="relative z-10 h-0">
+            {!atBottom && messages && messages.length > 0 && (
+              <button
+                onClick={() => {
+                  scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+                  setAtBottom(true);
+                }}
+                className="absolute -top-5 left-1/2 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full border bg-background/90 px-3 py-1.5 text-xs text-muted-foreground shadow-sm backdrop-blur transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <ArrowDown className="size-3" />
+                Jump to latest
+              </button>
             )}
           </div>
 
