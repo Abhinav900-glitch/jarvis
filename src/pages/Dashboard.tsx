@@ -618,20 +618,28 @@ export default function Dashboard() {
     }
   };
 
-  // ---- AI image generation: Puter.js → Cloudinary → Hugging Face → Pollinations ----
-  // Puter runs client-side and is keyless ("user pays"), so it goes first;
-  // the server chain is the fallback.
+  // ---- AI image generation: Perchance (server, primary) → Puter.js → rest ----
+  // Perchance is the free primary; if it fails, Puter runs client-side
+  // (keyless, "user pays"), then the remaining server chain.
   const generateImageSmart = async (
     prompt: string,
   ): Promise<{ url: string; publicId: string; provider: string }> => {
     try {
-      return await generateImageWithPuter(prompt, uploadFile);
-    } catch {
-      // Puter unavailable/refused/failed or storage failed → server chain.
-      // Clear any error the client upload path surfaced on the way down.
+      return await generateImageAction({ prompt });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // All server providers exhausted → last resort: client-side Puter.
+      console.warn("[image-gen] server chain failed, trying Puter.js:", msg);
       setAssistantError(null);
     }
-    return generateImageAction({ prompt });
+    try {
+      return await generateImageWithPuter(prompt, uploadFile);
+    } catch {
+      setAssistantError(null);
+      throw new Error(
+        "All image providers failed — Perchance, Cloudinary, Hugging Face, Replicate, Pollinations and Puter were tried.",
+      );
+    }
   };
 
   const generateImageWithPrompt = async (prompt: string) => {

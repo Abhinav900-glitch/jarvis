@@ -699,10 +699,10 @@ export const getSignedUploadUrl = action({
 
 /**
  * Text-to-image generation with automatic provider fallback:
- *   1. Cloudinary Image Generation add-on (best quality, needs add-on)
- *   2. Hugging Face Inference API (FLUX.1-schnell — uses HUGGING_FACE_TOKEN)
- *   3. Replicate (flux-schnell — uses REPLICATE_API_TOKEN)
- *   4. Perchance AI (free, no key — unofficial endpoint)
+ *   1. Perchance AI (free, no key — PRIMARY)
+ *   2. Cloudinary Image Generation add-on (needs add-on)
+ *   3. Hugging Face Inference API (FLUX.1-schnell — uses HUGGING_FACE_TOKEN)
+ *   4. Replicate (flux-schnell — uses REPLICATE_API_TOKEN)
  *   5. Pollinations AI (free, no key needed — always-available last resort)
  */
 export const generateImage = action({
@@ -742,6 +742,10 @@ export const generateImage = action({
 
     const attempts: { name: string; run: () => Promise<GeneratedImage> }[] = [
       {
+        name: "perchance",
+        run: () => generateViaPerchance(ctx, prompt),
+      },
+      {
         name: "cloudinary",
         run: () =>
           generateViaCloudinary(ctx, prompt, args.model, args.aspectRatio),
@@ -753,10 +757,6 @@ export const generateImage = action({
       {
         name: "replicate",
         run: () => generateViaReplicate(ctx, prompt),
-      },
-      {
-        name: "perchance",
-        run: () => generateViaPerchance(ctx, prompt),
       },
       {
         name: "pollinations",
