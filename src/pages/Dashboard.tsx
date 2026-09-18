@@ -2651,11 +2651,17 @@ export default function Dashboard() {
                         </button>
                         {img.provider ? (
                           <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-white">
-                            {img.provider === "huggingface"
-                              ? "HF"
-                              : img.provider === "pollinations"
-                                ? "Poll"
-                                : "Cld"}
+                            {img.provider === "puter"
+                              ? "Puter"
+                              : img.provider === "replicate"
+                                ? "Rep"
+                                : img.provider === "perchance"
+                                  ? "Per"
+                                  : img.provider === "pollinations"
+                                    ? "Poll"
+                                    : img.provider?.startsWith("hf/")
+                                      ? "HF"
+                                      : "Cld"}
                           </span>
                         ) : null}
                         <button

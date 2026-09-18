@@ -446,7 +446,155 @@ async function generateViaHuggingFace(
 }
 
 /**
- * Provider 3 — Pollinations AI (free, no key required). Final fallback.
+ * Provider 3 — Replicate (uses REPLICATE_API_TOKEN).
+ * Calls the official black-forest-labs/flux-schnell model synchronously via
+ * the `Prefer: wait` header (no version hash needed with the models
+ * endpoint), downloads the generated image and stores it on Cloudinary.
+ */
+async function generateViaReplicate(
+  ctx: ActionCtx,
+  prompt: string,
+): Promise<GeneratedImage> {
+  const token = process.env.REPLICATE_API_TOKEN;
+  if (!token) {
+    throw new Error("REPLICATE_API_TOKEN is not configured.");
+  }
+
+  const res = await fetch(
+    "https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        // Blocks until the prediction finishes (bounded by the model's own
+        // timeout) so no polling loop is needed.
+        Prefer: "wait",
+      },
+      body: JSON.stringify({
+        input: {
+          prompt: prompt.slice(0, 950),
+          aspect_ratio: "1:1",
+          output_format: "png",
+        },
+      }),
+      signal: AbortSignal.timeout(55_000),
+    },
+  );
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    console.error("Replicate error", res.status, errText.slice(0, 300));
+    throw new Error(`Replicate failed (${res.status})`);
+  }
+
+  const data = (await res.json()) as {
+    status?: string;
+    output?: string[] | string;
+    error?: string;
+  };
+  const outputUrl = Array.isArray(data.output) ? data.output[0] : data.output;
+  if (!outputUrl) {
+    throw new Error(
+      `Replicate returned no image (status: ${data.status ?? "unknown"}${data.error ? `, ${data.error}` : ""})`,
+    );
+  }
+
+  const imgRes = await fetch(outputUrl, {
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!imgRes.ok) {
+    throw new Error(`Replicate image download failed (${imgRes.status}).`);
+  }
+  const bytes = await imgRes.arrayBuffer();
+  if (bytes.byteLength < 1000) {
+    throw new Error("Replicate returned an empty image.");
+  }
+
+  try {
+    const stored = await uploadBytesToCloudinary(
+      ctx,
+      bytes,
+      `jarvis-gen/rep-${Date.now()}`,
+    );
+    return { url: stored.url, publicId: stored.publicId, provider: "replicate" };
+  } catch {
+    // Cloudinary upload failed — serve straight from Replicate's CDN
+    return {
+      url: outputUrl,
+      publicId: `jarvis-gen/rep-${Date.now()}`,
+      provider: "replicate",
+    };
+  }
+}
+
+/**
+ * Provider 4 — Perchance AI image generation (free, no key).
+ * Unofficial endpoint: request a generation with an arbitrary userKey, then
+ * download the temporary image and store it on Cloudinary. Perchance can be
+ * slow or block server IPs, so it fails fast into Pollinations.
+ */
+async function generateViaPerchance(
+  ctx: ActionCtx,
+  prompt: string,
+): Promise<GeneratedImage> {
+  const userKey = `jarvis-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+  const genUrl =
+    "https://image-generation.perchance.org/api/generate" +
+    `?prompt=${encodeURIComponent(prompt.slice(0, 500))}` +
+    `&negativePrompt=${encodeURIComponent("ugly, blurry, low quality, deformed")}` +
+    `&seed=${Math.floor(Math.random() * 1e9)}` +
+    "&resolution=512x512&guidanceScale=7" +
+    `&userKey=${encodeURIComponent(userKey)}`;
+
+  const genRes = await fetch(genUrl, {
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!genRes.ok) {
+    throw new Error(`Perchance generation failed (${genRes.status})`);
+  }
+  const gen = (await genRes.json()) as {
+    imageId?: string;
+    status?: string;
+  };
+  if (!gen.imageId) {
+    throw new Error("Perchance returned no image id (may be rate-limited).");
+  }
+
+  const imgRes = await fetch(
+    `https://image-generation.perchance.org/api/downloadTemporaryImage?imageId=${encodeURIComponent(gen.imageId)}`,
+    { headers: { Accept: "image/*" }, signal: AbortSignal.timeout(20_000) },
+  );
+  const ct = imgRes.headers.get("content-type") ?? "";
+  if (!imgRes.ok || !ct.startsWith("image/")) {
+    throw new Error(`Perchance download failed (${imgRes.status}).`);
+  }
+  const bytes = await imgRes.arrayBuffer();
+  if (bytes.byteLength < 1000) {
+    throw new Error("Perchance returned an empty image.");
+  }
+
+  try {
+    const stored = await uploadBytesToCloudinary(
+      ctx,
+      bytes,
+      `jarvis-gen/per-${Date.now()}`,
+    );
+    return { url: stored.url, publicId: stored.publicId, provider: "perchance" };
+  } catch {
+    // Cloudinary upload failed — data URL so the client still shows the image
+    const base64 = Buffer.from(bytes).toString("base64");
+    return {
+      url: `data:image/png;base64,${base64}`,
+      publicId: `jarvis-gen/per-${Date.now()}`,
+      provider: "perchance",
+    };
+  }
+}
+
+/**
+ * Provider 5 — Pollinations AI (free, no key required). Final fallback.
  * Strategy: actually DOWNLOAD the image (GET, with retries) so we can store
  * it on Cloudinary for a permanent URL. This is more reliable than returning
  * the pollinations URL directly: their queue can serve 429/504 on the first
@@ -553,7 +701,9 @@ export const getSignedUploadUrl = action({
  * Text-to-image generation with automatic provider fallback:
  *   1. Cloudinary Image Generation add-on (best quality, needs add-on)
  *   2. Hugging Face Inference API (FLUX.1-schnell — uses HUGGING_FACE_TOKEN)
- *   3. Pollinations AI (free, no key needed — always-available last resort)
+ *   3. Replicate (flux-schnell — uses REPLICATE_API_TOKEN)
+ *   4. Perchance AI (free, no key — unofficial endpoint)
+ *   5. Pollinations AI (free, no key needed — always-available last resort)
  */
 export const generateImage = action({
   args: {
@@ -599,6 +749,14 @@ export const generateImage = action({
       {
         name: "huggingface",
         run: () => generateViaHuggingFace(ctx, prompt),
+      },
+      {
+        name: "replicate",
+        run: () => generateViaReplicate(ctx, prompt),
+      },
+      {
+        name: "perchance",
+        run: () => generateViaPerchance(ctx, prompt),
       },
       {
         name: "pollinations",
