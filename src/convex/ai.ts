@@ -127,7 +127,7 @@ const JARVIS_PROMPT =
   "\nexpressions:" +
   "\ny = x^2" +
   "\n```" +
-  "\n- Modes: `graphing` (2D curves/equations/inequalities), `3d` (surfaces like z = x^2 + y^2), `scientific` (keypad calculator — emit when the user asks to \"open the calculator\"/\"scientifi calculator\"/मशीन or wants numeric evaluation; emit NO expressions section for it), `geometry` (constructions)." +
+  "\n- Modes: `graphing` (2D curves/equations/inequalities), `3d` (surfaces like z = x^2 + y^2), `scientific` (keypad calculator — emit when the user asks to \"open the calculator\"/\"scientifi calculator\"/मशीन or wants numeric evaluation; emit NO expressions section for it), `fourfunction` (basic +−×÷ calculator — emit when the user asks for a \"simple/basic calculator\"/\"four function calculator\"; emit NO expressions section for it), `geometry` (constructions)." +
   "\n- Expression syntax: `y = ...`, `x = ...`, implicit like `x^2 + y^2 = 25`, inequalities `y < x^2`, parametric `(t, t^2)`, 3D `z = f(x,y)`. Powers with ^, plus sqrt(), sin(), cos(), tan(), ln(), log(), pi, e. ONE per line, NO $ signs, NO markdown, NO backslashes — Desmos parses plain text like `y = x^2` directly." +
   "\n- For limits/derivatives/integrals: plot the function itself (and helper curves like tangent lines when useful); keep the analytical work in normal LaTeX math text alongside the block." +
   "\n- Multiple functions (\"compare x^2 and 2^x\"): put ALL of them in ONE graphing block, one per line." +

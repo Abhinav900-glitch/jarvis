@@ -54,7 +54,7 @@ function loadDesmos(apiKey: string): Promise<void> {
 // ```
 
 export interface DesmosSpec {
-  mode: "graphing" | "3d" | "scientific" | "geometry";
+  mode: "graphing" | "3d" | "scientific" | "geometry" | "fourfunction";
   zoom?: number;
   expressions: string[];
 }
@@ -70,10 +70,15 @@ export function parseDesmosSpec(source: string): DesmosSpec {
     const line = raw.trim();
     if (!line) continue;
     if (!inExpressions) {
-      const modeMatch = /^mode\s*:\s*(graphing|3d|scientific|geometry)\s*$/i.exec(line);
+      // Accept `four-function`, `four function`, `FourFunction` etc. for the
+      // basic calculator mode.
+      const modeMatch = /^mode\s*:\s*([a-z0-9\-_ ]+)$/i.exec(line);
       if (modeMatch) {
-        spec.mode = modeMatch[1].toLowerCase() as DesmosSpec["mode"];
-        continue;
+        const m = modeMatch[1].toLowerCase().replace(/[\s_-]+/g, "");
+        if (m === "graphing" || m === "3d" || m === "scientific" || m === "geometry" || m === "fourfunction") {
+          spec.mode = m;
+          continue;
+        }
       }
       const zoomMatch = /^zoom\s*:\s*(\d+(?:\.\d+)?)\s*$/i.exec(line);
       if (zoomMatch) {
@@ -131,6 +136,7 @@ interface DesmosGlobal {
   Calculator3D?: DesmosConstructor;
   GraphingCalculator3D?: DesmosConstructor;
   ScientificCalculator: DesmosConstructor;
+  FourFunctionCalculator?: DesmosConstructor;
   Geometry?: DesmosConstructor;
 }
 
@@ -171,10 +177,12 @@ export function DesmosCalculator({ source }: { source: string }) {
         const D = getDesmos();
         if (!D) throw new Error("Desmos loaded but the global is missing");
 
-        // The ScientificCalculator accepts ONLY fontSize, invertedColors,
-        // degreeMode and language — graphing-only options (keypad, zoomButtons,
-        // showGrid, expressions, ...) are invalid for it, so options are built
-        // per mode. 3D accepts every GraphingCalculator option per the docs.
+        // Basic calculators accept ONLY a strict subset of options —
+        // Scientific: fontSize/invertedColors/degreeMode/language;
+        // FourFunction: fontSize/invertedColors/language. Graphing-only options
+        // (keypad, zoomButtons, showGrid, expressions, ...) are invalid for
+        // them, so options are built per mode. 3D accepts every
+        // GraphingCalculator option per the docs.
         const options: Record<string, unknown> =
           spec.mode === "scientific"
             ? {
@@ -182,7 +190,11 @@ export function DesmosCalculator({ source }: { source: string }) {
                 degreeMode: false, // radians by default, like Desmos
                 invertedColors: false,
               }
-            : {
+            : spec.mode === "fourfunction"
+              ? {
+                  invertedColors: false,
+                }
+              : {
                 keypad: false,
                 expressions: true,
                 settingsMenu: false,
@@ -212,6 +224,19 @@ export function DesmosCalculator({ source }: { source: string }) {
           case "scientific":
             calc = new D.ScientificCalculator(containerRef.current, options);
             break;
+          case "fourfunction": {
+            if (!D.FourFunctionCalculator) {
+              throw new Error(
+                "Four-function calculator unavailable — your Desmos API key needs Four-Function access. Enable it at desmos.com/my-api, then reload.",
+              );
+            }
+            try {
+              calc = new D.FourFunctionCalculator(containerRef.current, options);
+            } catch {
+              throw new Error("Four-function calculator failed to start. Please try again.");
+            }
+            break;
+          }
           case "geometry":
             if (!D.Geometry) {
               throw new Error(
@@ -263,7 +288,9 @@ export function DesmosCalculator({ source }: { source: string }) {
         <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
           {spec.mode === "scientific"
             ? "Desmos scientific · keypad"
-            : `Desmos ${spec.mode === "3d" ? "3D" : spec.mode} · ${spec.expressions.length} expression${spec.expressions.length === 1 ? "" : "s"}`}
+            : spec.mode === "fourfunction"
+              ? "Desmos four-function · basic"
+              : `Desmos ${spec.mode === "3d" ? "3D" : spec.mode} · ${spec.expressions.length} expression${spec.expressions.length === 1 ? "" : "s"}`}
         </span>
         <div className="flex items-center gap-1">
           <button
@@ -285,7 +312,7 @@ export function DesmosCalculator({ source }: { source: string }) {
         </div>
       </div>
       <div
-        style={{ height: expanded ? 560 : spec.mode === "scientific" ? 460 : 380 }}
+        style={{ height: expanded ? 560 : spec.mode === "scientific" || spec.mode === "fourfunction" ? 460 : 380 }}
         className="relative w-full bg-white transition-[height] duration-200"
       >
         {/* Desmos owns this node's children — React never touches inside it. */}

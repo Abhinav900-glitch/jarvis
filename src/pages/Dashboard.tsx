@@ -10,6 +10,7 @@ import {
   ChevronDown,
   Download,
   FileText,
+  Equal,
   FunctionSquare,
   Globe,
   ImagePlus,
@@ -1412,9 +1413,9 @@ export default function Dashboard() {
 
   // Insert a ready-to-fill ```desmos block for the given calculator mode.
   // Scientific/geometry take no expressions; graphing/3d get a fill-in slot.
-  const insertDesmosBlock = (mode: "graphing" | "3d" | "scientific" | "geometry") => {
+  const insertDesmosBlock = (mode: "graphing" | "3d" | "scientific" | "geometry" | "fourfunction") => {
     const block =
-      mode === "scientific" || mode === "geometry"
+      mode === "scientific" || mode === "geometry" || mode === "fourfunction"
         ? "```desmos\nmode: " + mode + "\n```"
         : "```desmos\nmode: " + mode + "\nzoom: 10\nexpressions:\n\n```";
     setInput((prev) => (prev.trim() ? prev.replace(/\s*$/, "\n\n" + block) : block));
@@ -1422,7 +1423,7 @@ export default function Dashboard() {
     requestAnimationFrame(() => {
       const el = inputRef.current;
       if (!el) return;
-      if (mode === "scientific" || mode === "geometry") {
+      if (mode === "scientific" || mode === "geometry" || mode === "fourfunction") {
         el.setSelectionRange(el.value.length, el.value.length);
         return;
       }
@@ -2699,6 +2700,10 @@ export default function Dashboard() {
                         <DropdownMenuItem onClick={() => insertDesmosBlock("scientific")}>
                           <Calculator className="size-3.5" />
                           Scientific calculator
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => insertDesmosBlock("fourfunction")}>
+                          <Equal className="size-3.5" />
+                          Four-function calculator
                         </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => insertDesmosBlock("geometry")}>
                           <Shapes className="size-3.5" />
