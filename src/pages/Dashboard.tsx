@@ -64,6 +64,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useVoicePlayer, useVoiceRecorder } from "@/hooks/use-voice";
 import { useLiveMode } from "@/hooks/use-live";
 import { COUNTRIES, getCountry, AUTHOR } from "@/lib/languages";
+import { generateImageWithPuter } from "@/lib/puter";
 import { Radio } from "lucide-react";
 import { CalculatorPanel } from "@/components/calculator-panel";
 import { toast } from "sonner";
@@ -591,14 +592,27 @@ export default function Dashboard() {
     }
   };
 
-  // ---- AI image generation: Cloudinary → Hugging Face → Pollinations ----
+  // ---- AI image generation: Puter.js → Cloudinary → Hugging Face → Pollinations ----
+  // Puter runs client-side and is keyless ("user pays"), so it goes first;
+  // the server chain is the fallback.
+  const generateImageSmart = async (
+    prompt: string,
+  ): Promise<{ url: string; publicId: string; provider: string }> => {
+    try {
+      return await generateImageWithPuter(prompt, uploadFile);
+    } catch {
+      // Puter unavailable/refused/failed or storage failed → server chain.
+      // Clear any error the client upload path surfaced on the way down.
+      setAssistantError(null);
+    }
+    return generateImageAction({ prompt });
+  };
+
   const generateImageWithPrompt = async (prompt: string) => {
     setGenerating(true);
     setAssistantError(null);
     try {
-      const { url, publicId, provider } = await generateImageAction({
-        prompt,
-      });
+      const { url, publicId, provider } = await generateImageSmart(prompt);
       setPendingImages((prev) => [
         ...prev,
         { url, publicId, provider },
@@ -922,7 +936,7 @@ export default function Dashboard() {
       let generated: { url: string; publicId: string; provider: string } | null = null;
       let genError: string | null = null;
       try {
-        generated = await generateImageAction({ prompt });
+        generated = await generateImageSmart(prompt);
       } catch (err) {
         genError = err instanceof Error ? err.message : "Image generation failed.";
       }
