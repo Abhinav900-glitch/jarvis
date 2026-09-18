@@ -424,6 +424,9 @@ export default function Dashboard() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [deepResearch, setDeepResearch] = useState(false);
+  // Composer mode chips — arm News/Analyze for the next send (Gemini-style)
+  const [modeNews, setModeNews] = useState(false);
+  const [modeAnalyze, setModeAnalyze] = useState(false);
   const [followUps, setFollowUps] = useState<string[]>([]);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [assistantError, setAssistantError] = useState<string | null>(null);
@@ -1277,6 +1280,54 @@ export default function Dashboard() {
     } finally {
       setPanelBusy(null);
     }
+  };
+
+  // --- Composer mode chips (Gemini-style): News / Analyze run on next send ---
+  const runNewsOnInput = async () => {
+    const topic = input.trim();
+    if (!topic || panelBusy) return;
+    setInput("");
+    setPanelBusy("news");
+    setAssistantError(null);
+    try {
+      const items = await newsAction({ keywords: topic });
+      setPanelNews(items as NewsItem[]);
+    } catch (err) {
+      setAssistantError(err instanceof Error ? err.message : "News search failed.");
+    } finally {
+      setPanelBusy(null);
+      setModeNews(false);
+    }
+  };
+
+  const runAnalyzeOnInput = async () => {
+    const text = input.trim();
+    if (!text || panelBusy) return;
+    setInput("");
+    setPanelBusy("nlp");
+    setAssistantError(null);
+    try {
+      const result = await analyzeAction({ text });
+      setPanelNlp(result as NlpResult);
+    } catch (err) {
+      setAssistantError(err instanceof Error ? err.message : "NLP analysis failed.");
+    } finally {
+      setPanelBusy(null);
+      setModeAnalyze(false);
+    }
+  };
+
+  // The send button: dispatch to the armed mode, else the normal chat flow.
+  const runModeSend = async () => {
+    if (modeNews) {
+      await runNewsOnInput();
+      return;
+    }
+    if (modeAnalyze) {
+      await runAnalyzeOnInput();
+      return;
+    }
+    await runSend();
   };
 
   const handleSignOut = async () => {
@@ -2645,7 +2696,7 @@ export default function Dashboard() {
                 onDrop={handleDrop}
                 onDragOver={handleDragOver}
                 onDragLeave={handleDragLeave}
-                className={`relative rounded-xl border bg-card transition-all focus-within:border-foreground/30 focus-within:shadow-sm ${
+                className={`relative rounded-2xl border bg-card shadow-sm transition-all focus-within:border-foreground/30 focus-within:shadow-md ${
                   dragOver
                     ? "border-foreground/50 bg-accent/50 ring-2 ring-foreground/10"
                     : ""
@@ -2765,83 +2816,118 @@ export default function Dashboard() {
                     </button>
                   </div>
                 )}
+                {(deepResearch || modeNews || modeAnalyze) && (
+                  <div className="flex flex-wrap items-center gap-1.5 px-3.5 pt-3">
+                    {deepResearch ? (
+                      <button
+                        onClick={() => setDeepResearch(false)}
+                        className="inline-flex items-center gap-1 rounded-full border border-foreground/30 bg-foreground px-2.5 py-1 text-[11px] font-medium text-background transition-colors hover:bg-foreground/85"
+                        title="Deep Research is on — click to turn off"
+                      >
+                        <Globe className="size-3" />
+                        Deep Research
+                        <X className="size-3 opacity-60" />
+                      </button>
+                    ) : null}
+                    {modeNews ? (
+                      <button
+                        onClick={() => setModeNews(false)}
+                        className="inline-flex items-center gap-1 rounded-full border border-foreground/30 bg-foreground px-2.5 py-1 text-[11px] font-medium text-background transition-colors hover:bg-foreground/85"
+                        title="News mode is on — your next send summarizes the topic"
+                      >
+                        <Newspaper className="size-3" />
+                        News
+                        <X className="size-3 opacity-60" />
+                      </button>
+                    ) : null}
+                    {modeAnalyze ? (
+                      <button
+                        onClick={() => setModeAnalyze(false)}
+                        className="inline-flex items-center gap-1 rounded-full border border-foreground/30 bg-foreground px-2.5 py-1 text-[11px] font-medium text-background transition-colors hover:bg-foreground/85"
+                        title="Analyze mode is on — your next send runs NLP on the text"
+                      >
+                        <Languages className="size-3" />
+                        Analyze
+                        <X className="size-3 opacity-60" />
+                      </button>
+                    ) : null}
+                  </div>
+                )}
                 <div className="relative flex items-end">
-                  <div className="absolute left-1.5 bottom-2 flex items-center gap-0.5">
-                    <button
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={sending || uploading}
-                      title="Attach files (or drag & drop)"
-                      className="inline-flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
-                    >
-                      {uploading ? (
-                        <span className="inline-flex items-center gap-1 text-[10px] font-medium tabular-nums">
-                          <Loader2 className="size-3 animate-spin" />
-                          {uploadCount > 1 ? uploadCount : ""}
-                        </span>
-                      ) : (
-                        <Paperclip className="size-3.5" />
-                      )}
-                    </button>
-                    <button
-                      onClick={() => void handleGenerateImage()}
-                      disabled={generating || !input.trim()}
-                      title="Generate image with AI (uses your message as prompt — or type /image <prompt>)"
-                      className="inline-flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
-                    >
-                      {generating ? (
-                        <Loader2 className="size-3.5 animate-spin" />
-                      ) : (
-                        <Wand2 className="size-3.5" />
-                      )}
-                    </button>
-                    <button
-                      onClick={() => {
-                        const block = "```desmos\nmode: graphing\nzoom: 10\nexpressions:\n\n```";
-                        setInput((prev) =>
-                          prev.trim()
-                            ? prev.replace(/\s*$/, "\n\n" + block)
-                            : block,
-                        );
-                        inputRef.current?.focus();
-                        requestAnimationFrame(() => {
-                          const el = inputRef.current;
-                          if (!el) return;
-                          const pos = el.value.length - 4; // just before the closing fence
-                          el.setSelectionRange(pos, pos);
-                        });
-                      }}
-                      disabled={sending || editingId !== null}
-                      title="Insert a Desmos graph block — type an expression like y = x^2 inside, Jarvis plots it live"
-                      className="inline-flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
-                    >
-                      <FunctionSquare className="size-3.5" />
-                    </button>
+                  <div className="absolute left-1 bottom-1.5 flex items-center gap-0.5">
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <button
-                          disabled={sending || editingId !== null}
-                          title="More calculators — 3D graph, scientific, geometry"
-                          className="inline-flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
+                          disabled={sending}
+                          title="Add — attach files, generate an image, graphs, URL summary"
+                          className="inline-flex size-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
                         >
-                          <ChevronDown className="size-3" />
+                          {uploading ? (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-medium tabular-nums">
+                              <Loader2 className="size-3.5 animate-spin" />
+                              {uploadCount > 1 ? uploadCount : ""}
+                            </span>
+                          ) : (
+                            <Plus className="size-4" />
+                          )}
                         </button>
                       </DropdownMenuTrigger>
-                      <DropdownMenuContent align="start">
+                      <DropdownMenuContent align="start" className="w-64">
+                        <DropdownMenuItem onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+                          <Paperclip className="size-3.5" />
+                          <span className="flex flex-col">
+                            <span>Attach files</span>
+                            <span className="text-[10px] text-muted-foreground">PDFs, docs, images</span>
+                          </span>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => void handleGenerateImage()} disabled={generating || !input.trim()}>
+                          <Wand2 className="size-3.5" />
+                          <span className="flex flex-col">
+                            <span>Generate image</span>
+                            <span className="text-[10px] text-muted-foreground">from your message</span>
+                          </span>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setSummarizeInput("https://")}>
+                          <Link2 className="size-3.5" />
+                          <span className="flex flex-col">
+                            <span>Summarize a URL</span>
+                            <span className="text-[10px] text-muted-foreground">any web page</span>
+                          </span>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => insertDesmosBlock("graphing")}>
+                          <FunctionSquare className="size-3.5" />
+                          <span className="flex flex-col">
+                            <span>Desmos graph</span>
+                            <span className="text-[10px] text-muted-foreground">y = f(x), implicit, inequalities</span>
+                          </span>
+                        </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => insertDesmosBlock("3d")}>
                           <Box className="size-3.5" />
-                          3D graph — z = f(x, y)
+                          <span className="flex flex-col">
+                            <span>3D graph</span>
+                            <span className="text-[10px] text-muted-foreground">z = f(x, y) surfaces</span>
+                          </span>
                         </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => insertDesmosBlock("scientific")}>
                           <Calculator className="size-3.5" />
-                          Scientific calculator
+                          <span className="flex flex-col">
+                            <span>Scientific calculator</span>
+                            <span className="text-[10px] text-muted-foreground">full keypad</span>
+                          </span>
                         </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => insertDesmosBlock("fourfunction")}>
                           <Equal className="size-3.5" />
-                          Four-function calculator
+                          <span className="flex flex-col">
+                            <span>Four-function calculator</span>
+                            <span className="text-[10px] text-muted-foreground">+ − × ÷</span>
+                          </span>
                         </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => insertDesmosBlock("geometry")}>
                           <Shapes className="size-3.5" />
-                          Geometry tool
+                          <span className="flex flex-col">
+                            <span>Geometry tool</span>
+                            <span className="text-[10px] text-muted-foreground">constructions</span>
+                          </span>
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
@@ -2861,9 +2947,9 @@ export default function Dashboard() {
                             : "Message Jarvis…"
                     }
                     rows={1}
-                    className="max-h-40 w-full resize-none bg-transparent pl-20 pr-24 py-3 text-sm outline-none placeholder:text-muted-foreground/70"
+                    className="max-h-40 w-full resize-none bg-transparent pl-12 pr-28 py-3 text-sm outline-none placeholder:text-muted-foreground/70"
                   />
-                <div className="absolute right-2 bottom-2 flex items-center gap-1">
+                <div className="absolute right-1.5 bottom-1.5 flex items-center gap-0.5">
                   <button
                     onClick={() =>
                       recorder.recording
@@ -2904,9 +2990,9 @@ export default function Dashboard() {
                   </button>
                   <Button
                     size="icon-sm"
-                    onClick={() => void runSend()}
+                    onClick={() => void runModeSend()}
                     data-send-button
-                    disabled={(!input.trim() && pendingImages.length === 0 && !pendingFile) || sending}
+                    disabled={(!input.trim() && pendingImages.length === 0 && !pendingFile && !modeNews && !modeAnalyze) || sending || panelBusy !== null}
                     className="size-7 rounded-lg"
                   >
                     {sending ? (
@@ -2958,7 +3044,7 @@ export default function Dashboard() {
                   {live.error}
                 </div>
               )}
-              <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
+              <div className="mt-2.5 flex items-center justify-between text-[11px] text-muted-foreground">
                 {recorder.recording ? (
                   <span className="flex items-center gap-1.5 text-destructive">
                     <span className="size-1.5 animate-pulse rounded-full bg-destructive" />
@@ -2968,14 +3054,41 @@ export default function Dashboard() {
                   </span>
                 ) : (
                   <span className="hidden sm:inline">
-                    Enter to send · Shift+Enter for newline
+                    Enter to send · Shift+Enter for newline · / for commands
                   </span>
                 )}
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-1">
                   <button
-                    onClick={handleNews}
-                    disabled={panelBusy !== null || !input.trim()}
-                    className="inline-flex items-center gap-1 underline-offset-2 transition-colors hover:text-foreground hover:underline disabled:opacity-40"
+                    onClick={() => {
+                      setDeepResearch((v) => !v);
+                      setModeNews(false);
+                      setModeAnalyze(false);
+                    }}
+                    disabled={sending}
+                    className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 transition-colors disabled:opacity-40 ${
+                      deepResearch
+                        ? "border-foreground/30 bg-foreground text-background hover:bg-foreground/85"
+                        : "border-border/70 hover:bg-accent hover:text-foreground"
+                    }`}
+                    title="Toggle Deep Research — live web answers with citations"
+                  >
+                    <Globe className="size-3" />
+                    Deep Research
+                    {deepResearch ? <span className="size-1.5 rounded-full bg-current" /> : null}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setModeNews((v) => !v);
+                      setDeepResearch(false);
+                      inputRef.current?.focus();
+                    }}
+                    disabled={panelBusy !== null || sending}
+                    className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 transition-colors disabled:opacity-40 ${
+                      modeNews
+                        ? "border-foreground/30 bg-foreground text-background hover:bg-foreground/85"
+                        : "border-border/70 hover:bg-accent hover:text-foreground"
+                    }`}
+                    title="Type a topic, then send — Jarvis summarizes the latest news"
                   >
                     {panelBusy === "news" ? (
                       <Loader2 className="size-3 animate-spin" />
@@ -2985,9 +3098,18 @@ export default function Dashboard() {
                     News
                   </button>
                   <button
-                    onClick={handleAnalyze}
-                    disabled={panelBusy !== null || !lastMsg}
-                    className="inline-flex items-center gap-1 underline-offset-2 transition-colors hover:text-foreground hover:underline disabled:opacity-40"
+                    onClick={() => {
+                      setModeAnalyze((v) => !v);
+                      setDeepResearch(false);
+                      inputRef.current?.focus();
+                    }}
+                    disabled={panelBusy !== null || sending}
+                    className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 transition-colors disabled:opacity-40 ${
+                      modeAnalyze
+                        ? "border-foreground/30 bg-foreground text-background hover:bg-foreground/85"
+                        : "border-border/70 hover:bg-accent hover:text-foreground"
+                    }`}
+                    title="Type text, then send — Jarvis runs NLP analysis on it"
                   >
                     {panelBusy === "nlp" ? (
                       <Loader2 className="size-3 animate-spin" />
