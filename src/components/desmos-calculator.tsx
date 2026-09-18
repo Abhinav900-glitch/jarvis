@@ -171,16 +171,27 @@ export function DesmosCalculator({ source }: { source: string }) {
         const D = getDesmos();
         if (!D) throw new Error("Desmos loaded but the global is missing");
 
-        const options: Record<string, unknown> = {
-          keypad: spec.mode === "scientific",
-          expressions: spec.mode !== "scientific",
-          settingsMenu: false,
-          zoomButtons: true,
-          lockViewport: false,
-          showGrid: true,
-          border: false,
-          invertedColors: false,
-        };
+        // The ScientificCalculator accepts ONLY fontSize, invertedColors,
+        // degreeMode and language — graphing-only options (keypad, zoomButtons,
+        // showGrid, expressions, ...) are invalid for it, so options are built
+        // per mode. 3D accepts every GraphingCalculator option per the docs.
+        const options: Record<string, unknown> =
+          spec.mode === "scientific"
+            ? {
+                keypad: true,
+                degreeMode: false, // radians by default, like Desmos
+                invertedColors: false,
+              }
+            : {
+                keypad: false,
+                expressions: true,
+                settingsMenu: false,
+                zoomButtons: true,
+                lockViewport: false,
+                showGrid: true,
+                border: false,
+                invertedColors: false,
+              };
 
         let calc: DesmosCalc;
         switch (spec.mode) {
@@ -250,7 +261,9 @@ export function DesmosCalculator({ source }: { source: string }) {
     <div className="my-4 overflow-hidden rounded-md border">
       <div className="flex items-center justify-between border-b bg-muted/60 px-3 py-1.5">
         <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
-          Desmos {spec.mode === "3d" ? "3D" : spec.mode} · {spec.expressions.length} expression{spec.expressions.length === 1 ? "" : "s"}
+          {spec.mode === "scientific"
+            ? "Desmos scientific · keypad"
+            : `Desmos ${spec.mode === "3d" ? "3D" : spec.mode} · ${spec.expressions.length} expression${spec.expressions.length === 1 ? "" : "s"}`}
         </span>
         <div className="flex items-center gap-1">
           <button
@@ -272,7 +285,7 @@ export function DesmosCalculator({ source }: { source: string }) {
         </div>
       </div>
       <div
-        style={{ height: expanded ? 560 : 380 }}
+        style={{ height: expanded ? 560 : spec.mode === "scientific" ? 460 : 380 }}
         className="relative w-full bg-white transition-[height] duration-200"
       >
         {/* Desmos owns this node's children — React never touches inside it. */}

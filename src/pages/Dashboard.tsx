@@ -4,7 +4,10 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowUp,
+  Box,
+  Calculator,
   Check,
+  ChevronDown,
   Download,
   FileText,
   FunctionSquare,
@@ -23,6 +26,7 @@ import {
   RotateCcw,
   Search,
   Settings,
+  Shapes,
   Square,
   Sun,
   Trash2,
@@ -1406,6 +1410,27 @@ export default function Dashboard() {
     inputRef.current?.focus();
   };
 
+  // Insert a ready-to-fill ```desmos block for the given calculator mode.
+  // Scientific/geometry take no expressions; graphing/3d get a fill-in slot.
+  const insertDesmosBlock = (mode: "graphing" | "3d" | "scientific" | "geometry") => {
+    const block =
+      mode === "scientific" || mode === "geometry"
+        ? "```desmos\nmode: " + mode + "\n```"
+        : "```desmos\nmode: " + mode + "\nzoom: 10\nexpressions:\n\n```";
+    setInput((prev) => (prev.trim() ? prev.replace(/\s*$/, "\n\n" + block) : block));
+    inputRef.current?.focus();
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      if (mode === "scientific" || mode === "geometry") {
+        el.setSelectionRange(el.value.length, el.value.length);
+        return;
+      }
+      const pos = el.value.length - 4; // just before the closing fence
+      el.setSelectionRange(pos, pos);
+    });
+  };
+
   // --- Export chat as Markdown ---
   const handleExportChat = () => {
     if (!messages || messages.length === 0) return;
@@ -2656,6 +2681,31 @@ export default function Dashboard() {
                     >
                       <FunctionSquare className="size-3.5" />
                     </button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          disabled={sending || editingId !== null}
+                          title="More calculators — 3D graph, scientific, geometry"
+                          className="inline-flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
+                        >
+                          <ChevronDown className="size-3" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start">
+                        <DropdownMenuItem onClick={() => insertDesmosBlock("3d")}>
+                          <Box className="size-3.5" />
+                          3D graph — z = f(x, y)
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => insertDesmosBlock("scientific")}>
+                          <Calculator className="size-3.5" />
+                          Scientific calculator
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => insertDesmosBlock("geometry")}>
+                          <Shapes className="size-3.5" />
+                          Geometry tool
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
                   <textarea
                     ref={inputRef}
