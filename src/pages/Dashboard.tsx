@@ -91,6 +91,29 @@ interface NewsItem {
 // Sub-components
 // ---------------------------------------------------------------------------
 
+/** An AI-generated image stored on an assistant message — click to zoom. */
+function GeneratedImage({
+  url,
+  onOpen,
+}: {
+  url: string;
+  onOpen: () => void;
+}) {
+  return (
+    <button
+      onClick={onOpen}
+      className="mb-3 block max-w-md cursor-zoom-in overflow-hidden rounded-lg border"
+      title="View full size"
+    >
+      <img
+        src={url}
+        alt="Generated image"
+        className="w-full object-cover transition-opacity hover:opacity-90"
+      />
+    </button>
+  );
+}
+
 function SourceList({ sources }: { sources: Source[] }) {
   return (
     <div className="mt-4 border-t pt-3">
@@ -1001,7 +1024,7 @@ export default function Dashboard() {
     // Natural-language image generation: "generate an image of..." etc.
     if (!editingId && text && pendingImages.length === 0 && !pendingFile && !deepResearch) {
       const imgIntent = text.match(
-        /^\s*(?:please\s+)?(?:generate|create|make|draw|paint|render|give)\s+(?:me\s+)?(?:an?|the)??\s*(?:ai\s+)?(?:image|picture|photo|artwork|drawing|painting|illustration)\s*(?:of|showing|with|about|for)?\s*[:]?\s*([\s\S]{3,400})/i,
+        /^\s*(?:hey\s+|hi\s+|ok(?:ay)?[,\s]+)?(?:jarvis[,\s]+)?(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?(?:gen(?:erate|rate|arate)|create|make|draw|paint|render|show|give)\s+(?:me\s+)?(?:an?|the)??\s*(?:ai\s+)?(?:image|picture|photo|artwork|drawing|painting|illustration|pic)\s*(?:of|showing|with|about|for)?\s*[:]?\s*([\s\S]{3,400})/i,
       );
       if (imgIntent?.[1]) {
         const prompt = imgIntent[1].replace(/[.?!]+$/, "").trim();
@@ -2335,6 +2358,20 @@ export default function Dashboard() {
                         </div>
                       ) : (
                         <div className="mt-2 ml-8.5 text-sm text-foreground/90">
+                          {/* Generated images live on assistant messages —
+                              render them above the reply text. */}
+                          {(() => {
+                            const genUrl = m.imageUrl;
+                            if (!genUrl) return null;
+                            return (
+                              <GeneratedImage
+                                url={genUrl}
+                                onOpen={() =>
+                                  setLightbox({ images: [genUrl], index: 0 })
+                                }
+                              />
+                            );
+                          })()}
                           <MarkdownMessage
                             content={m.content}
                             sources={m.sources}
