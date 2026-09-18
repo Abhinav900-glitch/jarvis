@@ -290,7 +290,9 @@ export function DesmosCalculator({ source }: { source: string }) {
             ? "Desmos scientific · keypad"
             : spec.mode === "fourfunction"
               ? "Desmos four-function · basic"
-              : `Desmos ${spec.mode === "3d" ? "3D" : spec.mode} · ${spec.expressions.length} expression${spec.expressions.length === 1 ? "" : "s"}`}
+              : spec.mode === "geometry"
+                ? "Desmos geometry · construction tools"
+                : `Desmos ${spec.mode === "3d" ? "3D" : spec.mode} · ${spec.expressions.length} expression${spec.expressions.length === 1 ? "" : "s"}`}
         </span>
         <div className="flex items-center gap-1">
           <button
@@ -301,7 +303,15 @@ export function DesmosCalculator({ source }: { source: string }) {
             {expanded ? <Minimize2 className="size-3" /> : <Maximize2 className="size-3" />}
           </button>
           <a
-            href="https://www.desmos.com/calculator"
+            href={
+              spec.mode === "geometry"
+                ? "https://www.desmos.com/geometry"
+                : spec.mode === "3d"
+                  ? "https://www.desmos.com/3d"
+                  : spec.mode === "scientific"
+                    ? "https://www.desmos.com/scientific"
+                    : "https://www.desmos.com/calculator"
+            }
             target="_blank"
             rel="noopener noreferrer"
             className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
@@ -312,7 +322,7 @@ export function DesmosCalculator({ source }: { source: string }) {
         </div>
       </div>
       <div
-        style={{ height: expanded ? 560 : spec.mode === "scientific" || spec.mode === "fourfunction" ? 460 : 380 }}
+        style={{ height: expanded ? 560 : spec.mode === "scientific" || spec.mode === "fourfunction" || spec.mode === "geometry" ? 460 : 380 }}
         className="relative w-full bg-white transition-[height] duration-200"
       >
         {/* Desmos owns this node's children — React never touches inside it. */}

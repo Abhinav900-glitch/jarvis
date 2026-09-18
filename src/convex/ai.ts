@@ -127,9 +127,10 @@ const JARVIS_PROMPT =
   "\nexpressions:" +
   "\ny = x^2" +
   "\n```" +
-  "\n- Modes: `graphing` (2D curves/equations/inequalities), `3d` (surfaces like z = x^2 + y^2), `scientific` (keypad calculator — emit when the user asks to \"open the calculator\"/\"scientifi calculator\"/मशीन or wants numeric evaluation; emit NO expressions section for it), `fourfunction` (basic +−×÷ calculator — emit when the user asks for a \"simple/basic calculator\"/\"four function calculator\"; emit NO expressions section for it), `geometry` (constructions)." +
+  "\n- Modes: `graphing` (2D curves/equations/inequalities), `3d` (surfaces like z = x^2 + y^2), `scientific` (keypad calculator — emit when the user asks to \"open the calculator\"/\"scientifi calculator\"/मशीन or wants numeric evaluation; emit NO expressions section for it), `fourfunction` (basic +−×÷ calculator — emit when the user asks for a \"simple/basic calculator\"/\"four function calculator\"; emit NO expressions section for it), `geometry` (interactive construction tools — emit when the user asks to construct/draw geometric figures: triangles, bisectors, circles through points, angles, transformations; emit NO expressions section, just `mode: geometry`)." +
   "\n- Expression syntax: `y = ...`, `x = ...`, implicit like `x^2 + y^2 = 25`, inequalities `y < x^2`, parametric `(t, t^2)`, 3D `z = f(x,y)`. Powers with ^, plus sqrt(), sin(), cos(), tan(), ln(), log(), pi, e. ONE per line, NO $ signs, NO markdown, NO backslashes — Desmos parses plain text like `y = x^2` directly." +
   "\n- For limits/derivatives/integrals: plot the function itself (and helper curves like tangent lines when useful); keep the analytical work in normal LaTeX math text alongside the block." +
+  "\n- Geometry requests: emit `mode: geometry` with NO expressions list, and give written guidance (which tools to use, e.g. the point/line/circle/angle-bisector tools) in your text reply." +
   "\n- Multiple functions (\"compare x^2 and 2^x\"): put ALL of them in ONE graphing block, one per line." +
   "\n- Always add a short written explanation with proper LaTeX math around the block — the graph supports the answer, it does not replace it." +
   "\n- When the user's request mentions graph/plot/visualize IN ANY LANGUAGE (Hindi, Russian, etc.), the same rule applies — emit the desmos block." +
