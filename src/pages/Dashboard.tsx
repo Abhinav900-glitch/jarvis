@@ -65,6 +65,10 @@ import { useVoicePlayer, useVoiceRecorder } from "@/hooks/use-voice";
 import { useLiveMode } from "@/hooks/use-live";
 import { COUNTRIES, getCountry, AUTHOR } from "@/lib/languages";
 import { generateImageWithPuter } from "@/lib/puter";
+import {
+  generateImageWithPerchance,
+  type PerchanceKeys,
+} from "@/lib/perchance";
 import { Radio } from "lucide-react";
 import { CalculatorPanel } from "@/components/calculator-panel";
 import { toast } from "sonner";
@@ -420,6 +424,8 @@ export default function Dashboard() {
 
   // Cloudinary OAuth connection status (live query)
   const cloudinaryStatus = useQuery(api.cloudinaryOAuth.getStatus);
+  // Client-side Perchance credentials (corsproxy free tier is browser-only)
+  const perchanceKeys = useQuery(api.imageKeys.getPerchanceKeys);
 
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -618,12 +624,25 @@ export default function Dashboard() {
     }
   };
 
-  // ---- AI image generation: Perchance (server, primary) → Puter.js → rest ----
-  // Perchance is the free primary; if it fails, Puter runs client-side
-  // (keyless, "user pays"), then the remaining server chain.
+  // ---- AI image generation: Perchance (client, primary) → server chain → Puter ----
+  // Perchance runs client-side (corsproxy's free tier only serves browser
+  // requests); the server chain (Pollinations etc.) is fallback; Puter.js last.
   const generateImageSmart = async (
     prompt: string,
   ): Promise<{ url: string; publicId: string; provider: string }> => {
+    if (perchanceKeys?.corsproxyKey && perchanceKeys?.perchanceKey) {
+      try {
+        return await generateImageWithPerchance(
+          prompt,
+          perchanceKeys as PerchanceKeys,
+          uploadFile,
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn("[image-gen] perchance failed, falling back:", msg);
+        setAssistantError(null);
+      }
+    }
     try {
       return await generateImageAction({ prompt });
     } catch (err) {
@@ -637,7 +656,7 @@ export default function Dashboard() {
     } catch {
       setAssistantError(null);
       throw new Error(
-        "All image providers failed — Perchance, Cloudinary, Hugging Face, Replicate, Pollinations and Puter were tried.",
+        "All image providers failed — Perchance, Pollinations, Cloudinary, Hugging Face, Replicate and Puter were tried.",
       );
     }
   };
