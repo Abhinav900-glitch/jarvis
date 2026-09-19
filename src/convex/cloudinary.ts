@@ -534,39 +534,66 @@ async function generateViaReplicate(
  * download the temporary image and store it on Cloudinary. Perchance can be
  * slow or block server IPs, so it fails fast into Pollinations.
  */
+/**
+ * Fetch through corsproxy.io (edge network with rotating clean IPs that
+ * passes Perchance's Cloudflare challenge). Needs CORSPROXY_API_KEY.
+ */
+async function proxiedFetch(url: string, timeoutMs: number): Promise<Response> {
+  const proxyKey = process.env.CORSPROXY_API_KEY;
+  if (!proxyKey) {
+    throw new Error(
+      "CORSPROXY_API_KEY is not configured — add it in the Keys tab to enable Perchance through the proxy.",
+    );
+  }
+  return fetch(
+    `https://corsproxy.io/?key=${encodeURIComponent(proxyKey)}&url=${encodeURIComponent(url)}`,
+    { headers: { Accept: "application/json, image/*" }, signal: AbortSignal.timeout(timeoutMs) },
+  );
+}
+
+/**
+ * Provider 1 — Perchance AI image generation (free, no API cost).
+ * Two prerequisites (added in the Keys tab):
+ *   - CORSPROXY_API_KEY: routes through corsproxy.io so Cloudflare doesn't
+ *     challenge the request (server IPs alone get "Just a moment...").
+ *   - PERCHANCE_USER_KEY: a VERIFIED 64-hex userKey. Perchance only accepts
+ *     keys activated by its in-page verification in a real browser on
+ *     perchance.org — grab one from the network tab while generating an
+ *     image there (userKey=... in the api/generate request). Keys stay
+ *     valid for a while; if it expires, grab a fresh one.
+ */
 async function generateViaPerchance(
   ctx: ActionCtx,
   prompt: string,
 ): Promise<GeneratedImage> {
-  const userKey = `jarvis-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
-  const genUrl =
-    "https://image-generation.perchance.org/api/generate" +
-    `?prompt=${encodeURIComponent(prompt.slice(0, 500))}` +
-    `&negativePrompt=${encodeURIComponent("ugly, blurry, low quality, deformed")}` +
-    `&seed=${Math.floor(Math.random() * 1e9)}` +
-    "&resolution=512x512&guidanceScale=7" +
-    `&userKey=${encodeURIComponent(userKey)}`;
+  const userKey = process.env.PERCHANCE_USER_KEY;
+  if (!userKey || !/^[a-f0-9]{64}$/.test(userKey)) {
+    throw new Error(
+      "PERCHANCE_USER_KEY is not configured or not a 64-char hex key — copy it from perchance.org while generating an image there (api/generate?userKey=...).",
+    );
+  }
 
-  // 12s cap: Perchance sits behind Cloudflare and regularly serves a "Just
-  // a moment..." challenge page to server IPs — fail fast so the fallback
-  // chain isn't starved of time budget by a provider that may be blocked.
-  // VERIFIED 2026-09: even with a correct 64-hex userKey + full params the
-  // API returns invalid_key until the key is activated by solving Perchance's
-  // in-page verification in a real browser — so server-side generation only
-  // works when Cloudflare + key activation both happen to pass. The circuit
-  // breaker keeps this provider from taxing requests while it's blocked.
-  const genRes = await fetch(genUrl, {
-    headers: { Accept: "application/json" },
-    signal: AbortSignal.timeout(12_000),
-  });
+  const params =
+    `prompt=${encodeURIComponent(`'${prompt.slice(0, 500)}`)}` +
+    `&negativePrompt=${encodeURIComponent("'ugly, blurry, low quality, deformed")}` +
+    `&userKey=${userKey}` +
+    `&__cache_bust=${Math.random()}` +
+    `&seed=-1` +
+    `&resolution=512x512&guidanceScale=7` +
+    `&channel=ai-text-to-image-generator&subChannel=public` +
+    `&requestId=${Math.random()}`;
+  const genUrl = `https://image-generation.perchance.org/api/generate?${params}`;
+
+  // 25s cap — generation can take a while on Perchance's queue, but fail
+  // fast enough that the fallback chain still has budget.
+  const genRes = await proxiedFetch(genUrl, 25_000);
   if (!genRes.ok) {
     throw new Error(`Perchance generation failed (${genRes.status})`);
   }
   const rawBody = await genRes.text();
   if (rawBody.trimStart().startsWith("<")) {
-    // Cloudflare challenge / bot-block page instead of JSON.
     throw new Error(
-      "Perchance is bot-blocked from this server (Cloudflare challenge).",
+      "Perchance returned a Cloudflare challenge — check the corsproxy key/quota.",
     );
   }
   let gen: { imageId?: string; status?: string };
@@ -575,13 +602,18 @@ async function generateViaPerchance(
   } catch {
     throw new Error("Perchance returned a non-JSON response.");
   }
+  if (gen.status === "invalid_key" || (!gen.imageId && gen.status)) {
+    throw new Error(
+      `Perchance rejected the key (${gen.status ?? "unknown"}) — the PERCHANCE_USER_KEY expired; grab a fresh one from perchance.org.`,
+    );
+  }
   if (!gen.imageId) {
     throw new Error("Perchance returned no image id (may be rate-limited).");
   }
 
-  const imgRes = await fetch(
+  const imgRes = await proxiedFetch(
     `https://image-generation.perchance.org/api/downloadTemporaryImage?imageId=${encodeURIComponent(gen.imageId)}`,
-    { headers: { Accept: "image/*" }, signal: AbortSignal.timeout(15_000) },
+    20_000,
   );
   const ct = imgRes.headers.get("content-type") ?? "";
   if (!imgRes.ok || !ct.startsWith("image/")) {
