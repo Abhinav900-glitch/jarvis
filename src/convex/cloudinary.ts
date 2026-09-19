@@ -406,11 +406,11 @@ async function generateViaHuggingFace(
     throw new Error("HUGGING_FACE_TOKEN is not configured.");
   }
 
-  // SDXL-Turbo is distilled for 1-4 step generation with low guidance
+  // Single attempt: SDXL-Turbo 1-step. HF currently has no served
+  // text-to-image models on this token, so extra attempts only burn the
+  // chain's time budget — this stays as a fast-fail, auto-healing step.
   const attempts: { model: string; steps: number; guidance: number }[] = [
     { model: "stabilityai/sdxl-turbo", steps: 1, guidance: 0.0 },
-    { model: "stabilityai/sdxl-turbo", steps: 4, guidance: 0.0 },
-    { model: "black-forest-labs/FLUX.1-schnell", steps: 4, guidance: 0.0 },
   ];
 
   const failures: string[] = [];
@@ -547,24 +547,36 @@ async function generateViaPerchance(
     "&resolution=512x512&guidanceScale=7" +
     `&userKey=${encodeURIComponent(userKey)}`;
 
+  // 12s cap: Perchance sits behind Cloudflare and regularly serves a "Just
+  // a moment..." challenge page to server IPs — fail fast so the fallback
+  // chain isn't starved of time budget by a provider that may be blocked.
   const genRes = await fetch(genUrl, {
     headers: { Accept: "application/json" },
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(12_000),
   });
   if (!genRes.ok) {
     throw new Error(`Perchance generation failed (${genRes.status})`);
   }
-  const gen = (await genRes.json()) as {
-    imageId?: string;
-    status?: string;
-  };
+  const rawBody = await genRes.text();
+  if (rawBody.trimStart().startsWith("<")) {
+    // Cloudflare challenge / bot-block page instead of JSON.
+    throw new Error(
+      "Perchance is bot-blocked from this server (Cloudflare challenge).",
+    );
+  }
+  let gen: { imageId?: string; status?: string };
+  try {
+    gen = JSON.parse(rawBody) as { imageId?: string; status?: string };
+  } catch {
+    throw new Error("Perchance returned a non-JSON response.");
+  }
   if (!gen.imageId) {
     throw new Error("Perchance returned no image id (may be rate-limited).");
   }
 
   const imgRes = await fetch(
     `https://image-generation.perchance.org/api/downloadTemporaryImage?imageId=${encodeURIComponent(gen.imageId)}`,
-    { headers: { Accept: "image/*" }, signal: AbortSignal.timeout(20_000) },
+    { headers: { Accept: "image/*" }, signal: AbortSignal.timeout(15_000) },
   );
   const ct = imgRes.headers.get("content-type") ?? "";
   if (!imgRes.ok || !ct.startsWith("image/")) {
@@ -699,11 +711,11 @@ export const getSignedUploadUrl = action({
 
 /**
  * Text-to-image generation with automatic provider fallback:
- *   1. Perchance AI (free, no key — PRIMARY)
- *   2. Cloudinary Image Generation add-on (needs add-on)
- *   3. Hugging Face Inference API (FLUX.1-schnell — uses HUGGING_FACE_TOKEN)
- *   4. Replicate (flux-schnell — uses REPLICATE_API_TOKEN)
- *   5. Pollinations AI (free, no key needed — always-available last resort)
+ *   1. Perchance AI (free, no key — PRIMARY; fast-fails if bot-blocked)
+ *   2. Pollinations AI (free, no key — verified fast & reliable fallback)
+ *   3. Cloudinary Image Generation add-on (needs add-on)
+ *   4. Hugging Face Inference API (uses HUGGING_FACE_TOKEN)
+ *   5. Replicate (uses REPLICATE_API_TOKEN)
  */
 export const generateImage = action({
   args: {
@@ -746,6 +758,12 @@ export const generateImage = action({
         run: () => generateViaPerchance(ctx, prompt),
       },
       {
+        // Verified working (fast, keyless) — #2 so the chain almost always
+        // produces an image even when Perchance is bot-blocked.
+        name: "pollinations",
+        run: () => generateViaPollinations(ctx, prompt),
+      },
+      {
         name: "cloudinary",
         run: () =>
           generateViaCloudinary(ctx, prompt, args.model, args.aspectRatio),
@@ -757,10 +775,6 @@ export const generateImage = action({
       {
         name: "replicate",
         run: () => generateViaReplicate(ctx, prompt),
-      },
-      {
-        name: "pollinations",
-        run: () => generateViaPollinations(ctx, prompt),
       },
     ];
 

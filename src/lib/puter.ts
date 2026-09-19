@@ -18,6 +18,27 @@ interface PuterGlobal {
 
 let puterPromise: Promise<PuterGlobal | null> | null = null;
 
+/** Reject/wait guard so a stuck script or hung API call can't deadlock the
+ *  fallback chain — callers need a failure to move on. */
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${ms / 1000}s.`)),
+      ms,
+    );
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e instanceof Error ? e : new Error(String(e)));
+      },
+    );
+  });
+}
+
 function loadPuter(): Promise<PuterGlobal | null> {
   if (puterPromise) return puterPromise;
   puterPromise = new Promise((resolve) => {
@@ -72,11 +93,21 @@ export async function generateImageWithPuter(
     file: File,
   ) => Promise<{ url: string; publicId: string } | null>,
 ): Promise<{ url: string; publicId: string; provider: string }> {
-  const puter = await loadPuter();
+  const puter = await withTimeout(
+    loadPuter(),
+    10_000,
+    "Puter.js load",
+  );
   if (!puter?.ai?.txt2img) {
     throw new Error("Puter.js is unavailable in this browser.");
   }
-  const raw = await puter.ai.txt2img(prompt);
+  // txt2img can hang indefinitely if the sign-in popup is dismissed without
+  // completing auth — bound it so callers can fall back cleanly.
+  const raw = await withTimeout(
+    Promise.resolve(puter.ai.txt2img(prompt)),
+    90_000,
+    "Puter image generation",
+  );
   const blob = await toBlob(raw);
   const file = new File([blob], `jarvis-puter-${Date.now()}.png`, {
     type: blob.type || "image/png",
