@@ -550,6 +550,11 @@ async function generateViaPerchance(
   // 12s cap: Perchance sits behind Cloudflare and regularly serves a "Just
   // a moment..." challenge page to server IPs — fail fast so the fallback
   // chain isn't starved of time budget by a provider that may be blocked.
+  // VERIFIED 2026-09: even with a correct 64-hex userKey + full params the
+  // API returns invalid_key until the key is activated by solving Perchance's
+  // in-page verification in a real browser — so server-side generation only
+  // works when Cloudflare + key activation both happen to pass. The circuit
+  // breaker keeps this provider from taxing requests while it's blocked.
   const genRes = await fetch(genUrl, {
     headers: { Accept: "application/json" },
     signal: AbortSignal.timeout(12_000),
@@ -717,6 +722,38 @@ export const getSignedUploadUrl = action({
  *   4. Hugging Face Inference API (uses HUGGING_FACE_TOKEN)
  *   5. Replicate (uses REPLICATE_API_TOKEN)
  */
+
+// Circuit breaker: a provider that keeps failing (e.g. Perchance's Cloudflare
+// bot-block) shouldn't tax every request with its full timeout. After 3
+// consecutive failures the provider is skipped for a cool-down period.
+const providerBreakers = new Map<
+  string,
+  { failures: number; openUntil: number }
+>();
+
+function breakerAllows(name: string): boolean {
+  const state = providerBreakers.get(name);
+  if (!state) return true;
+  if (Date.now() >= state.openUntil) {
+    providerBreakers.delete(name);
+    return true;
+  }
+  return false;
+}
+
+function breakerRecord(name: string, ok: boolean): void {
+  if (ok) {
+    providerBreakers.delete(name);
+    return;
+  }
+  const state = providerBreakers.get(name) ?? { failures: 0, openUntil: 0 };
+  state.failures += 1;
+  if (state.failures >= 3) {
+    state.openUntil = Date.now() + 10 * 60_000; // 10-minute cool-down
+    state.failures = 0;
+  }
+  providerBreakers.set(name, state);
+}
 export const generateImage = action({
   args: {
     prompt: v.string(),
@@ -780,12 +817,18 @@ export const generateImage = action({
 
     const errors: string[] = [];
     for (const attempt of attempts) {
+      if (!breakerAllows(attempt.name)) {
+        errors.push(`${attempt.name}: skipped (cooling down after recent failures)`);
+        continue;
+      }
       try {
         const result = await attempt.run();
+        breakerRecord(attempt.name, true);
         return result;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[image-gen] ${attempt.name} failed: ${msg}`);
+        breakerRecord(attempt.name, false);
         errors.push(`${attempt.name}: ${msg}`);
       }
     }
