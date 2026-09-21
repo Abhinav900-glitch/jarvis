@@ -46,6 +46,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { JarvisIcon } from "@/components/jarvis-icon";
+import { JarvisHud, type HudPhase } from "@/components/jarvis-hud";
 import { JarvisOrb } from "@/components/jarvis-orb";
 import { Lightbox } from "@/components/lightbox";
 import { MarkdownMessage, looksLikeMathOrMarkdown } from "@/components/markdown-message";
@@ -741,12 +742,15 @@ export default function Dashboard() {
 
   // ---- Live mode: Whisper STT → chat pipeline → spoken reply ----
   const liveTurnRef = useRef<(text: string) => Promise<void>>(async () => {});
+  // Transcript shown on the full-screen JARVIS HUD
+  const [liveTranscript, setLiveTranscript] = useState<{ user: string; assistant: string } | null>(null);
   const live = useLiveMode(
     async (audio: Blob, country: string) => {
       const lang = getCountry(country).language;
       const bytes = await audio.arrayBuffer();
       const { text } = await transcribeWhisperAction({ audio: bytes, language: lang });
       if (!text) return "";
+      setLiveTranscript((t) => ({ user: text, assistant: t?.assistant ?? "" }));
       await liveTurnRef.current(text);
       return text;
     },
@@ -762,6 +766,7 @@ export default function Dashboard() {
       spokenReplyRef.current !== last._id
     ) {
       spokenReplyRef.current = last._id;
+      setLiveTranscript((t) => ({ user: t?.user ?? "", assistant: last.content }));
       live.deliverReply(last.content);
     }
   }, [messages, sending, live]);
@@ -3156,6 +3161,27 @@ export default function Dashboard() {
         startIndex={lightbox?.index ?? 0}
         alt="Chat image"
         onClose={() => setLightbox(null)}
+      />
+      {/* Full-screen JARVIS live-mode HUD */}
+      <JarvisHud
+        open={live.active}
+        phase={
+          live.speaking
+            ? ("speaking" as HudPhase)
+            : live.processing
+              ? ("processing" as HudPhase)
+              : live.listening
+                ? ("listening" as HudPhase)
+                : ("idle" as HudPhase)
+        }
+        level={live.level}
+        transcript={liveTranscript}
+        language={getCountry(countryCode).name}
+        onStop={() => {
+          live.stop();
+          setLiveTranscript(null);
+        }}
+        onSkip={() => window.speechSynthesis?.cancel()}
       />
     </TooltipProvider>
   );

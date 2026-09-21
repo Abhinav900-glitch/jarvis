@@ -477,3 +477,54 @@
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
+
+/* --------------------------------------------------------------------------- */
+/* Live-mode JARVIS HUD (src/components/jarvis-hud.tsx)                        */
+/* --------------------------------------------------------------------------- */
+.jarvis-hud-grid {
+  background-image:
+    linear-gradient(rgba(34, 211, 238, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(34, 211, 238, 0.05) 1px, transparent 1px);
+  background-size: 42px 42px;
+}
+
+.jarvis-hud-scanline::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 90px;
+  top: -90px;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    rgba(34, 211, 238, 0.045),
+    transparent
+  );
+  animation: jarvis-hud-scan 5.5s linear infinite;
+  pointer-events: none;
+}
+@keyframes jarvis-hud-scan {
+  from { top: -90px; }
+  to { top: 100%; }
+}
+
+.jarvis-hud-ring-cw { animation: jarvis-orb-spin-cw 9s linear infinite; }
+.jarvis-hud-ring-ccw { animation: jarvis-orb-spin-ccw 14s linear infinite; }
+
+.jarvis-hud-blink {
+  animation: jarvis-hud-blink 1.2s ease-in-out infinite;
+}
+@keyframes jarvis-hud-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jarvis-hud-ring-cw,
+  .jarvis-hud-ring-ccw,
+  .jarvis-hud-scanline::after,
+  .jarvis-hud-blink {
+    animation: none;
+  }
+}
