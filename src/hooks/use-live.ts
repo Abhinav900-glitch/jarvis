@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useAction } from "convex/react";
+import { api } from "@/convex/_generated/api";
 import { getCountry } from "@/lib/languages";
 
 // ---------------------------------------------------------------------------
@@ -58,6 +60,7 @@ export function useLiveMode(onTurn: LiveTurnHandler, countryCode: string): LiveM
   onTurnRef.current = onTurn;
   const countryRef = useRef(countryCode);
   countryRef.current = countryCode;
+  const speakTts = useAction(api.voice.speak);
 
   // Recording machinery
   const streamRef = useRef<MediaStream | null>(null);
@@ -69,6 +72,20 @@ export function useLiveMode(onTurn: LiveTurnHandler, countryCode: string): LiveM
   const levelTimerRef = useRef<number | null>(null);
   const silenceStartRef = useRef<number | null>(null);
   const bargeInRef = useRef(false);
+  const ttsSourceRef = useRef<AudioBufferSourceNode | null>(null);
+
+  /** Stop Groq-TTS audio playback instantly (barge-in / session end). */
+  const stopTtsAudio = useCallback(() => {
+    const src = ttsSourceRef.current;
+    if (src) {
+      try {
+        src.stop();
+      } catch {
+        /* already stopped */
+      }
+      ttsSourceRef.current = null;
+    }
+  }, []);
 
   const country = getCountry(countryCode);
 
@@ -97,6 +114,7 @@ export function useLiveMode(onTurn: LiveTurnHandler, countryCode: string): LiveM
             // 350ms of sustained voice → interrupt
             bargeInRef.current = true;
             window.speechSynthesis.cancel();
+            stopTtsAudio();
           }
         } else {
           silenceStartRef.current = null;
@@ -105,7 +123,7 @@ export function useLiveMode(onTurn: LiveTurnHandler, countryCode: string): LiveM
       levelRafRef.current = requestAnimationFrame(tick);
     };
     levelRafRef.current = requestAnimationFrame(tick);
-  }, []);
+  }, [stopTtsAudio]);
 
   const stopLevelMonitor = useCallback(() => {
     if (levelRafRef.current !== null) {
@@ -190,30 +208,14 @@ export function useLiveMode(onTurn: LiveTurnHandler, countryCode: string): LiveM
     );
   }, []);
 
-  const speakReply = useCallback(
-    (text: string, onDone: () => void) => {
+  // Browser speech synthesis fallback (sentence-chunked so barge-in cancels fast)
+  const speakWithBrowser = useCallback(
+    (spoken: string, onDone: () => void) => {
       const synth = window.speechSynthesis;
       if (!synth) {
         onDone();
         return;
       }
-      // Strip markdown/math for clean speech
-      const spoken = text
-        .replace(/```[\s\S]*?```/g, " (code block) ")
-        .replace(/\$\$[\s\S]*?\$\$/g, " (equation) ")
-        .replace(/\$[^$\n]+\$/g, " (expression) ")
-        .replace(/\[(\d+)\]\([^)]*\)/g, "[$1]")
-        .replace(/[#*_`~>|]/g, "")
-        .replace(/\n{2,}/g, ". ")
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, 1200);
-
-      synth.cancel();
-      bargeInRef.current = false;
-      silenceStartRef.current = null;
-
-      // Long replies: chunk into sentences so cancel() responds quickly
       const sentences = spoken.match(/[^.!?。]+[.!?。]*/g) ?? [spoken];
       const utterances = sentences.map((s) => {
         const u = new SpeechSynthesisUtterance(s.trim());
@@ -227,7 +229,6 @@ export function useLiveMode(onTurn: LiveTurnHandler, countryCode: string): LiveM
         u.rate = 1.05;
         return u;
       });
-
       utterances.forEach((u, i) => {
         u.onstart = () => {
           speakingRef.current = true;
@@ -235,24 +236,75 @@ export function useLiveMode(onTurn: LiveTurnHandler, countryCode: string): LiveM
         };
         u.onend = () => {
           const isLast = i === utterances.length - 1;
-          const interrupted = bargeInRef.current;
-          if (interrupted || isLast) {
-            speakingRef.current = false;
-            setSpeaking(false);
-            onDone();
-          }
+          if (bargeInRef.current || isLast) onDone();
         };
-        u.onerror = () => {
-          speakingRef.current = false;
-          setSpeaking(false);
-          onDone();
-        };
+        u.onerror = () => onDone();
         synth.speak(u);
       });
-
       if (utterances.length === 0) onDone();
     },
     [pickVoice],
+  );
+
+  // Speak a reply: Groq neural TTS (server) first, browser voice as fallback.
+  const speakReply = useCallback(
+    (text: string, onDone: () => void) => {
+      // Strip markdown/math for clean speech
+      const spoken = text
+        .replace(/\x60\x60\x60[\s\S]*?\x60\x60\x60/g, " (code block) ")
+        .replace(/\$\$[\s\S]*?\$\$/g, " (equation) ")
+        .replace(/\$[^$\n]+\$/g, " (expression) ")
+        .replace(/\[(\d+)\]\([^)]*\)/g, "[$1]")
+        .replace(/[#*_~>|]/g, "")
+        .replace(/\n{2,}/g, ". ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 1200);
+      if (!spoken) {
+        onDone();
+        return;
+      }
+
+      window.speechSynthesis?.cancel();
+      bargeInRef.current = false;
+      silenceStartRef.current = null;
+
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        speakingRef.current = false;
+        setSpeaking(false);
+        onDone();
+      };
+
+      void (async () => {
+        try {
+          // Primary: Groq TTS (GROQ_API_KEY). Returns null audio when no
+          // server model is available — falls back to the browser voice.
+          const { audio } = await speakTts({ text: spoken });
+          if (bargeInRef.current || !activeRef.current) {
+            finish();
+            return;
+          }
+          if (!audio) throw new Error("no server audio");
+          const ctx = audioCtxRef.current;
+          if (!ctx) throw new Error("audio context closed");
+          const buf = await ctx.decodeAudioData(audio.slice(0));
+          const src = ctx.createBufferSource();
+          src.buffer = buf;
+          src.onended = finish;
+          ttsSourceRef.current = src;
+          speakingRef.current = true;
+          setSpeaking(true);
+          src.start();
+        } catch {
+          // Fallback: browser speech synthesis
+          speakWithBrowser(spoken, finish);
+        }
+      })();
+    },
+    [speakTts, speakWithBrowser],
   );
 
   // ------------------------------------------------------------------
@@ -267,6 +319,7 @@ export function useLiveMode(onTurn: LiveTurnHandler, countryCode: string): LiveM
     setSpeaking(false);
     stopLevelMonitor();
     window.speechSynthesis?.cancel();
+    stopTtsAudio();
     stopRecording();
     recorderRef.current = null;
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -274,7 +327,7 @@ export function useLiveMode(onTurn: LiveTurnHandler, countryCode: string): LiveM
     void audioCtxRef.current?.close().catch(() => {});
     audioCtxRef.current = null;
     analyserRef.current = null;
-  }, [stopLevelMonitor, stopRecording]);
+  }, [stopLevelMonitor, stopRecording, stopTtsAudio]);
 
   const start = useCallback(async () => {
     setError(null);
