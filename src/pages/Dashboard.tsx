@@ -2225,6 +2225,7 @@ export default function Dashboard() {
                     { label: "🎨 Generate image", cmd: "/image " },
                     { label: "📈 Plot graph", cmd: "/plot y = x^2" },
                     { label: "🔬 Deep research", cmd: "__research__" },
+                    { label: "🎙 Live voice", cmd: "__live__" },
 
                   ].map((item) => (
                     <button
@@ -2233,6 +2234,10 @@ export default function Dashboard() {
                         if (item.cmd === "__research__") {
                           setDeepResearch(true);
                           inputRef.current?.focus();
+                          return;
+                        }
+                        if (item.cmd === "__live__") {
+                          void live.start();
                           return;
                         }
                         setInput(item.cmd);
@@ -2905,6 +2910,14 @@ export default function Dashboard() {
                         </button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="start" className="w-64">
+                        <DropdownMenuItem onClick={() => void live.start()}>
+                          <Radio className="size-3.5 text-cyan-500" />
+                          <span className="flex flex-col">
+                            <span>Live voice mode</span>
+                            <span className="text-[10px] text-muted-foreground">talk hands-free, full-screen HUD</span>
+                          </span>
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
                         <DropdownMenuItem onClick={() => fileInputRef.current?.click()} disabled={uploading}>
                           <Paperclip className="size-3.5" />
                           <span className="flex flex-col">
@@ -3090,6 +3103,19 @@ export default function Dashboard() {
                   </span>
                 )}
                 <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => (live.active ? live.stop() : void live.start())}
+                    disabled={sending && !live.active}
+                    className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 transition-colors disabled:opacity-40 ${
+                      live.active
+                        ? "border-red-500/40 bg-red-500/10 text-red-500 hover:bg-red-500/20"
+                        : "border-cyan-500/40 text-cyan-600 hover:bg-cyan-500/10 dark:text-cyan-400"
+                    }`}
+                    title="Live voice mode — talk with Jarvis hands-free (full-screen HUD)"
+                  >
+                    <Radio className={`size-3 ${live.active ? "animate-pulse" : ""}`} />
+                    {live.active ? "Live · end" : "Live"}
+                  </button>
                   <button
                     onClick={() => {
                       setDeepResearch((v) => !v);
