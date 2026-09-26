@@ -220,8 +220,56 @@ const TTS_VOICES = [
 
 const TTS_FALLBACK_VOICE = "Celeste";
 
+// ---------------------------------------------------------------------------
+// ElevenLabs TTS — second fallback for Jarvis's voice.
+// Activates automatically when ELEVENLABS_API_KEY is set (Keys tab) and Groq
+// TTS is unavailable (no Groq key / model terms not accepted / model error).
+// eleven_turbo_v2_5 is fast, multilingual (Hindi, Russian, Arabic, ...) and
+// cheap — a good match for the multi-country live mode. Override the voice
+// with ELEVENLABS_VOICE_ID (defaults to Rachel).
+// ---------------------------------------------------------------------------
+async function speakWithElevenLabs(
+  text: string,
+): Promise<{ audio: ArrayBuffer | null; voice: string }> {
+  const apiKey = process.env.ELEVENLABS_API_KEY;
+  if (!apiKey) return { audio: null, voice: "browser" };
+
+  const voiceId = process.env.ELEVENLABS_VOICE_ID || "21m00Tcm4TlvDq8ikWAM"; // Rachel
+  const clipped = text.trim().slice(0, 2500); // keep latency + cost sane
+  if (!clipped) return { audio: null, voice: "browser" };
+
+  try {
+    const res = await fetch(
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`,
+      {
+        method: "POST",
+        headers: {
+          "xi-api-key": apiKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          text: clipped,
+          model_id: "eleven_turbo_v2_5",
+          voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+        }),
+        signal: AbortSignal.timeout(30_000),
+      },
+    );
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      console.error("ElevenLabs TTS error", res.status, errText.slice(0, 300));
+      return { audio: null, voice: "browser" };
+    }
+    return { audio: await res.arrayBuffer(), voice: "elevenlabs" };
+  } catch (err) {
+    console.error("ElevenLabs TTS failed:", err instanceof Error ? err.message : err);
+    return { audio: null, voice: "browser" };
+  }
+}
+
 /**
- * Speak text aloud. Returns WAV audio bytes when a server TTS model is
+ * Speak text aloud. TTS chain: Groq Orpheus (WAV) → ElevenLabs (MP3) →
+ * browser speech synthesis. Returns audio bytes when a server model is
  * available, or { audio: null } when none is — the client falls back to the
  * browser's built-in speech synthesis in that case (no user-facing error).
  */
@@ -232,7 +280,7 @@ export const speak = action({
     if (userId === null) throw new Error("Sign in to use speech output.");
 
     const key = process.env.GROQ_API_KEY;
-    if (!key) return { audio: null, voice: "browser" };
+    if (!key) return speakWithElevenLabs(args.text);
 
     const voice = TTS_VOICES.includes((args.voice ?? "") as never)
       ? (args.voice as string)
@@ -267,8 +315,9 @@ export const speak = action({
       } else {
         console.error("Groq TTS error", res.status, errText);
       }
-      // Graceful: let the client use browser speech synthesis instead.
-      return { audio: null, voice: "browser" };
+      // Graceful: try ElevenLabs next; the client falls back to browser TTS
+      // only when every server provider is unavailable (no user-facing error).
+      return speakWithElevenLabs(text);
     }
 
     const audioBuffer = await res.arrayBuffer();
